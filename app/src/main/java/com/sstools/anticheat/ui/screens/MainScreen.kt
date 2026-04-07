@@ -360,7 +360,7 @@ fun MinecraftResultsScreen(
 
         state.error?.let { error ->
             item {
-                ErrorCard(error, showFolderButton = state.verdict == "NO_ACCESS", onSelectFolder = onSelectFolder)
+                ErrorCard(error, showFolderButton = state.verdict == "NO_ACCESS", onSelectFolder = { onSelectFolder(null) })
             }
         }
 
@@ -396,7 +396,7 @@ fun MinecraftResultsScreen(
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
-                        onClick = onSelectFolder,
+                        onClick = { onSelectFolder(null) },
                         modifier = Modifier.weight(1f),
                         border = BorderStroke(1.dp, AccentBlue.copy(alpha = 0.5f)),
                         shape = RoundedCornerShape(10.dp)
