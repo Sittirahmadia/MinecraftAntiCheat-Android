@@ -128,11 +128,37 @@ fun MainScreen(
                     items(logFindings) { (finding, launcher) -> LogFindingCard(finding, launcher) }
                 }
 
-                // Deleted files
+                // Deleted / Suspicious files
                 state.deletedFileScanResult?.let { deleted ->
                     if (deleted.flaggedItems.isNotEmpty()) {
-                        item { SectionTitle("Suspicious Files", Icons.Default.Delete) }
+                        item { SectionTitle("Flagged Files (${deleted.flaggedItems.size})", Icons.Default.Warning) }
                         items(deleted.flaggedItems) { file -> DeletedFileCard(file) }
+                    }
+                    if (deleted.recentlyDeleted.isNotEmpty()) {
+                        item { SectionTitle("Recently Deleted / Trash (${deleted.recentlyDeleted.size})", Icons.Default.Delete) }
+                        items(deleted.recentlyDeleted) { file -> DeletedFileCard(file) }
+                    }
+                    if (deleted.trashItems.isNotEmpty()) {
+                        item { SectionTitle("Trash Items (${deleted.trashItems.size})", Icons.Default.DeleteSweep) }
+                        items(deleted.trashItems) { file -> DeletedFileCard(file) }
+                    }
+                    if (deleted.downloadFiles.isNotEmpty()) {
+                        item { SectionTitle("Downloads Scanned (${deleted.downloadFiles.size})", Icons.Default.Download) }
+                        items(deleted.downloadFiles.take(20)) { file -> DeletedFileCard(file) }
+                    }
+                    // Summary card
+                    item {
+                        Card(colors = CardDefaults.cardColors(containerColor = DarkCard), shape = RoundedCornerShape(12.dp)) {
+                            Column(Modifier.padding(14.dp)) {
+                                Text("Deleted File Scan Summary", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Spacer(Modifier.height(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    Text("Scanned: ${deleted.totalScanned}", fontSize = 12.sp, color = TextSecondary)
+                                    Text("Flagged: ${deleted.flaggedItems.size}", fontSize = 12.sp, color = if (deleted.flaggedItems.isNotEmpty()) Danger else Success)
+                                    Text("Trash: ${deleted.trashItems.size + deleted.recentlyDeleted.size}", fontSize = 12.sp, color = TextSecondary)
+                                }
+                            }
+                        }
                     }
                 }
 

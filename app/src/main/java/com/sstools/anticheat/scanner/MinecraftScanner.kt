@@ -46,67 +46,77 @@ object MinecraftScanner {
         val severity: String
     )
 
-    private val LAUNCHERS = listOf(
-        LauncherInfo(
+    // Launchers with instance support — we scan both the base .minecraft
+    // AND dynamically discover instances inside /files/instance/*/
+    data class LauncherConfig(
+        val name: String,
+        val packageName: String,
+        val dataRoot: String, // e.g. /storage/emulated/0/Android/data/{pkg}/files
+        val hasInstances: Boolean = false, // if true, scan /instance/*/.minecraft
+        val instanceDir: String = "instance", // subdir inside dataRoot for instances
+        val extraPaths: List<String> = emptyList() // additional paths to check
+    )
+
+    private val LAUNCHER_CONFIGS = listOf(
+        LauncherConfig(
             name = "Zalith Launcher",
             packageName = "com.movtery.zalithlauncher",
-            basePaths = listOf(
-                "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/.minecraft",
-                "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/instance/default/.minecraft",
-                "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files",
+            dataRoot = "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files",
+            hasInstances = true,
+            instanceDir = "instance",
+            extraPaths = listOf(
                 "/sdcard/Android/data/com.movtery.zalithlauncher/files/.minecraft",
             )
         ),
-        LauncherInfo(
+        LauncherConfig(
             name = "Zalith Launcher 2",
             packageName = "com.movtery.zalithlauncher2",
-            basePaths = listOf(
-                "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/.minecraft",
-                "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/instance/default/.minecraft",
-                "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files",
+            dataRoot = "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files",
+            hasInstances = true,
+            instanceDir = "instance",
+            extraPaths = listOf(
                 "/sdcard/Android/data/com.movtery.zalithlauncher2/files/.minecraft",
             )
         ),
-        LauncherInfo(
+        LauncherConfig(
             name = "Mojo Launcher",
             packageName = "git.artdeell.mojo",
-            basePaths = listOf(
-                "/storage/emulated/0/Android/data/git.artdeell.mojo/files/.minecraft",
-                "/storage/emulated/0/Android/data/git.artdeell.mojo/files/instance/default/.minecraft",
-                "/storage/emulated/0/Android/data/git.artdeell.mojo/files",
+            dataRoot = "/storage/emulated/0/Android/data/git.artdeell.mojo/files",
+            hasInstances = true,
+            instanceDir = "instance",
+            extraPaths = listOf(
                 "/sdcard/Android/data/git.artdeell.mojo/files/.minecraft",
             )
         ),
-        LauncherInfo(
+        LauncherConfig(
             name = "PojavLauncher",
             packageName = "net.kdt.pojavlaunch",
-            basePaths = listOf(
-                "/storage/emulated/0/Android/data/net.kdt.pojavlaunch/files/.minecraft",
+            dataRoot = "/storage/emulated/0/Android/data/net.kdt.pojavlaunch/files",
+            hasInstances = false,
+            extraPaths = listOf(
                 "/storage/emulated/0/games/PojavLauncher/.minecraft",
                 "/sdcard/Android/data/net.kdt.pojavlaunch/files/.minecraft",
             )
         ),
-        LauncherInfo(
+        LauncherConfig(
             name = "PojavLauncher (Debug)",
             packageName = "net.kdt.pojavlaunch.debug",
-            basePaths = listOf(
-                "/storage/emulated/0/Android/data/net.kdt.pojavlaunch.debug/files/.minecraft",
-            )
+            dataRoot = "/storage/emulated/0/Android/data/net.kdt.pojavlaunch.debug/files",
+            hasInstances = false,
         ),
-        LauncherInfo(
+        LauncherConfig(
             name = "Fold Craft Launcher",
             packageName = "com.tungsten.fcl",
-            basePaths = listOf(
-                "/storage/emulated/0/Android/data/com.tungsten.fcl/files/.minecraft",
-                "/storage/emulated/0/FCL/.minecraft",
-            )
+            dataRoot = "/storage/emulated/0/Android/data/com.tungsten.fcl/files",
+            hasInstances = true,
+            instanceDir = "instance",
+            extraPaths = listOf("/storage/emulated/0/FCL/.minecraft"),
         ),
-        LauncherInfo(
+        LauncherConfig(
             name = "HMCL-PE",
             packageName = "com.tungsten.hmclpe",
-            basePaths = listOf(
-                "/storage/emulated/0/Android/data/com.tungsten.hmclpe/files/.minecraft",
-            )
+            dataRoot = "/storage/emulated/0/Android/data/com.tungsten.hmclpe/files",
+            hasInstances = false,
         ),
     )
 
@@ -135,93 +145,167 @@ object MinecraftScanner {
     /**
      * Detect all installed Minecraft launchers.
      * Uses Shizuku for /Android/data/ access, falls back to direct File.
+     * Discovers instances dynamically for launchers that use them.
      */
     fun detectLaunchers(): List<LauncherScanResult> {
         val results = mutableListOf<LauncherScanResult>()
         val useShizuku = ShizukuHelper.isAvailable()
         Log.i(TAG, "detectLaunchers: Shizuku available=$useShizuku")
 
-        for (launcher in LAUNCHERS) {
+        for (config in LAUNCHER_CONFIGS) {
             try {
-                var foundPath: String? = null
+                val dataRoot = config.dataRoot
+                val dataRootExists = checkDirExists(dataRoot, useShizuku)
 
-                for (basePath in launcher.basePaths) {
-                    try {
-                        val exists = if (useShizuku) {
-                            ShizukuHelper.directoryExists(basePath)
-                        } else {
-                            val dir = File(basePath)
-                            dir.exists() && dir.isDirectory && dir.canRead()
-                        }
-
-                        if (exists) {
-                            foundPath = basePath
-                            Log.i(TAG, "Found ${launcher.name} at $basePath")
+                if (!dataRootExists) {
+                    // Also check extra paths
+                    var extraFound = false
+                    for (extraPath in config.extraPaths) {
+                        if (checkDirExists(extraPath, useShizuku)) {
+                            // Found via extra path — scan as single .minecraft
+                            val result = scanMinecraftDir(config.name, config.packageName, extraPath, useShizuku)
+                            if (result != null) results.add(result)
+                            extraFound = true
                             break
                         }
-                    } catch (e: Exception) {
-                        Log.d(TAG, "Error checking $basePath: ${e.message}")
                     }
+                    if (!extraFound) {
+                        Log.d(TAG, "${config.name}: data root not found at $dataRoot")
+                    }
+                    continue
                 }
 
-                // Also check if the package's data dir exists at all (via Shizuku)
-                if (foundPath == null && useShizuku) {
-                    val dataDir = "/storage/emulated/0/Android/data/${launcher.packageName}"
-                    if (ShizukuHelper.directoryExists(dataDir)) {
-                        // Search for .minecraft inside
-                        val candidates = listOf(
-                            "$dataDir/files/.minecraft",
-                            "$dataDir/files/instance/default/.minecraft",
-                            "$dataDir/files",
-                        )
-                        for (candidate in candidates) {
-                            if (ShizukuHelper.directoryExists(candidate)) {
-                                foundPath = candidate
-                                Log.i(TAG, "Found ${launcher.name} at $candidate (via Shizuku search)")
-                                break
+                Log.i(TAG, "Found ${config.name} data root: $dataRoot")
+
+                // Collect all .minecraft paths to scan
+                val minecraftPaths = mutableListOf<Pair<String, String>>() // path to label
+
+                // 1. Check direct .minecraft in dataRoot
+                val directMc = "$dataRoot/.minecraft"
+                if (checkDirExists(directMc, useShizuku)) {
+                    minecraftPaths.add(directMc to "default")
+                    Log.i(TAG, "${config.name}: found direct .minecraft at $directMc")
+                }
+
+                // 2. If launcher has instances, discover them
+                if (config.hasInstances) {
+                    val instancesDir = "$dataRoot/${config.instanceDir}"
+                    if (checkDirExists(instancesDir, useShizuku)) {
+                        val instanceNames = if (useShizuku) {
+                            ShizukuHelper.listFiles(instancesDir)
+                        } else {
+                            try {
+                                File(instancesDir).listFiles()?.filter { it.isDirectory }?.map { it.name } ?: emptyList()
+                            } catch (_: Exception) { emptyList() }
+                        }
+
+                        Log.i(TAG, "${config.name}: found ${instanceNames.size} instance(s)")
+                        for (instanceName in instanceNames) {
+                            // Each instance may have .minecraft inside
+                            val instanceMc = "$instancesDir/$instanceName/.minecraft"
+                            val instanceRoot = "$instancesDir/$instanceName"
+
+                            if (checkDirExists(instanceMc, useShizuku)) {
+                                minecraftPaths.add(instanceMc to "instance:$instanceName")
+                            } else if (checkDirExists(instanceRoot, useShizuku)) {
+                                // Some instances put mods directly in the instance folder
+                                val modsInInstance = "$instanceRoot/mods"
+                                if (checkDirExists(modsInInstance, useShizuku)) {
+                                    minecraftPaths.add(instanceRoot to "instance:$instanceName")
+                                }
                             }
                         }
-                        // If still not found, just use the data dir itself
-                        if (foundPath == null) {
-                            foundPath = "$dataDir/files"
-                            Log.i(TAG, "Using ${launcher.name} base at $foundPath")
+                    }
+                }
+
+                // 3. Check extra paths
+                for (extraPath in config.extraPaths) {
+                    if (checkDirExists(extraPath, useShizuku)) {
+                        val alreadyAdded = minecraftPaths.any { it.first == extraPath }
+                        if (!alreadyAdded) {
+                            minecraftPaths.add(extraPath to "extra")
                         }
                     }
                 }
 
-                if (foundPath != null) {
-                    val modsPath = "$foundPath/${launcher.modsSubdir}"
-                    val logsPath = "$foundPath/${launcher.logsSubdir}"
-                    val versionsPath = "$foundPath/${launcher.versionsSubdir}"
+                // If no .minecraft found anywhere, try dataRoot itself
+                if (minecraftPaths.isEmpty()) {
+                    minecraftPaths.add(dataRoot to "root")
+                }
 
-                    val mods = listModFiles(modsPath, useShizuku)
-                    val logFindings = scanLogs(logsPath, useShizuku)
-                    val versions = listVersions(versionsPath, useShizuku)
+                // Scan all discovered paths and merge into one result
+                val allMods = mutableListOf<ModFileInfo>()
+                val allLogFindings = mutableListOf<LogFinding>()
+                val allVersions = mutableListOf<String>()
+                var primaryPath = dataRoot
+                var modsDir: String? = null
 
-                    val modsDirExists = if (useShizuku) {
-                        ShizukuHelper.directoryExists(modsPath)
-                    } else {
-                        try { File(modsPath).exists() } catch (_: Exception) { false }
+                for ((mcPath, label) in minecraftPaths) {
+                    if (label == "default" || primaryPath == dataRoot) {
+                        primaryPath = mcPath
                     }
 
-                    results.add(LauncherScanResult(
-                        name = launcher.name,
-                        packageName = launcher.packageName,
-                        path = foundPath,
-                        found = true,
-                        mods = mods,
-                        logFindings = logFindings,
-                        versions = versions,
-                        modsDir = if (modsDirExists) modsPath else null
-                    ))
-                    Log.i(TAG, "${launcher.name}: ${mods.size} mods, ${logFindings.size} log findings, ${versions.size} versions")
+                    val modsPath = "$mcPath/mods"
+                    val logsPath = "$mcPath/logs"
+                    val versionsPath = "$mcPath/versions"
+
+                    val mods = listModFiles(modsPath, useShizuku)
+                    allMods.addAll(mods)
+                    if (mods.isNotEmpty() && modsDir == null) modsDir = modsPath
+
+                    allLogFindings.addAll(scanLogs(logsPath, useShizuku))
+                    allVersions.addAll(listVersions(versionsPath, useShizuku))
+
+                    Log.i(TAG, "${config.name} [$label]: ${mods.size} mods at $modsPath")
                 }
+
+                results.add(LauncherScanResult(
+                    name = config.name,
+                    packageName = config.packageName,
+                    path = primaryPath,
+                    found = true,
+                    mods = allMods,
+                    logFindings = allLogFindings.distinctBy { it.logFile to it.matchedPattern },
+                    versions = allVersions.distinct(),
+                    modsDir = modsDir
+                ))
+                Log.i(TAG, "${config.name} TOTAL: ${allMods.size} mods, ${allLogFindings.size} log findings, ${allVersions.size} versions")
+
             } catch (e: Exception) {
-                Log.e(TAG, "Error detecting ${launcher.name}: ${e.message}", e)
+                Log.e(TAG, "Error detecting ${config.name}: ${e.message}", e)
             }
         }
 
         return results
+    }
+
+    /**
+     * Scan a single .minecraft directory as a launcher result.
+     */
+    private fun scanMinecraftDir(name: String, pkg: String, mcPath: String, useShizuku: Boolean): LauncherScanResult? {
+        val mods = listModFiles("$mcPath/mods", useShizuku)
+        val logFindings = scanLogs("$mcPath/logs", useShizuku)
+        val versions = listVersions("$mcPath/versions", useShizuku)
+        val modsDir = if (checkDirExists("$mcPath/mods", useShizuku)) "$mcPath/mods" else null
+
+        return LauncherScanResult(
+            name = name, packageName = pkg, path = mcPath, found = true,
+            mods = mods, logFindings = logFindings, versions = versions, modsDir = modsDir
+        )
+    }
+
+    /**
+     * Check if a directory exists — Shizuku or direct.
+     */
+    private fun checkDirExists(path: String, useShizuku: Boolean): Boolean {
+        return try {
+            if (useShizuku) {
+                ShizukuHelper.directoryExists(path)
+            } else {
+                val dir = File(path)
+                dir.exists() && dir.isDirectory && dir.canRead()
+            }
+        } catch (_: Exception) { false }
     }
 
     /**

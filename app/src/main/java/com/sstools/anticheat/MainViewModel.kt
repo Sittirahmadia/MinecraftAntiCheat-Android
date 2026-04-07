@@ -149,7 +149,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Deleted file scan error: ${e.message}", e)
                     DeletedFileScanner.DeletedFileScanResult(
-                        emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 0
+                        emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 0
                     )
                 }
                 _scanState.value = _scanState.value.copy(deletedFileScanResult = deletedResult)
