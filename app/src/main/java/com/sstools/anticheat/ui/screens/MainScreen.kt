@@ -123,7 +123,7 @@ fun HomeScreen(viewModel: MainViewModel, state: ScanState, onSelectFolder: () ->
                             shape = RoundedCornerShape(12.dp),
                             border = BorderStroke(1.dp, DarkBorder)
                         ) {
-                            Icon(Icons.Default.Search, null, tint = PurpleLight, Modifier.size(18.dp))
+                            Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp), tint = PurpleLight)
                             Spacer(Modifier.width(8.dp))
                             Text("Auto Detect", fontSize = 13.sp, color = TextPrimary)
                         }
@@ -207,7 +207,7 @@ fun ActionCard(title: String, description: String, icon: ImageVector, color: Col
                 Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Text(description, fontSize = 12.sp, color = TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
+            Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(18.dp), tint = TextSecondary)
         }
     }
 }
@@ -488,7 +488,7 @@ fun ErrorCard(error: String) {
     Card(colors = CardDefaults.cardColors(containerColor = Warning.copy(alpha = 0.1f)),
         border = BorderStroke(1.dp, Warning.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp)) {
         Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Default.Info, null, tint = Warning, modifier = Modifier.size(18.dp))
+            Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = Warning)
             Text(error, fontSize = 12.sp, color = Warning)
         }
     }
