@@ -98,10 +98,14 @@ object SafScanner {
                         val sizeMb = modFile.length().toFloat() / (1024 * 1024)
                         modsFound.add(SafModFile(name, modFile.uri.toString(), roundMb(sizeMb)))
                         totalScanned++
-
-                        // Copy to cache and inspect
                         scanned++
                         onProgress(0.1f + (0.6f * scanned / maxOf(modCount, 1)), "Inspecting: $name ($scanned/$modCount)")
+
+                        // Skip files over 20000MB
+                        if (sizeMb > 20000f) {
+                            Log.w(TAG, "Skipping $name: too large (${sizeMb}MB)")
+                            continue
+                        }
 
                         try {
                             val tempFile = copyToCache(context, modFile)

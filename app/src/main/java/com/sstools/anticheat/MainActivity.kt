@@ -29,7 +29,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ -> }
 
-    // SAF folder picker result
+    // SAF folder picker — opens directly to a convenient location
     val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
@@ -42,9 +42,7 @@ class MainActivity : ComponentActivity() {
                 )
             } catch (e: Exception) {
                 try {
-                    contentResolver.takePersistableUriPermission(
-                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 } catch (_: Exception) {}
             }
             Log.i("MainActivity", "Folder selected: $uri")
@@ -72,13 +70,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openFolderPicker() {
+    fun openFolderPicker(suggestedPath: String? = null) {
         try {
             // Try to open directly to Android/data for convenience
-            val initialUri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3AAndroid%2Fdata")
-            folderPickerLauncher.launch(initialUri)
+            // The suggestedPath can hint at a specific launcher's folder
+            val initialUri = when {
+                suggestedPath != null -> {
+                    // e.g. "Android/data/com.movtery.zalithlauncher/files"
+                    val encoded = suggestedPath.replace("/", "%2F")
+                    Uri.parse("content://com.android.externalstorage.documents/document/primary%3A$encoded")
+                }
+                else -> Uri.parse("content://com.android.externalstorage.documents/document/primary%3AAndroid%2Fdata")
+            }
+            try {
+                folderPickerLauncher.launch(initialUri)
+            } catch (_: Exception) {
+                folderPickerLauncher.launch(null)
+            }
         } catch (e: Exception) {
-            // Fallback: open root
             try {
                 folderPickerLauncher.launch(null)
             } catch (_: Exception) {

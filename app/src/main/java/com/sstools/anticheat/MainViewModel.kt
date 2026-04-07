@@ -15,25 +15,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
+// Max file size to inspect in MB
+const val MAX_JAR_SIZE_MB = 20000f
+
 data class ScanState(
     val isScanning: Boolean = false,
     val progress: Float = 0f,
     val currentTask: String = "",
-    // Minecraft scan results
     val safResult: SafScanner.SafScanResult? = null,
     val launcherResults: List<MinecraftScanner.LauncherScanResult> = emptyList(),
     val modScanResults: List<JarInspector.JarScanResult> = emptyList(),
-    // Deleted files
     val deletedFileScanResult: DeletedFileScanner.DeletedFileScanResult? = null,
-    // Chrome
     val chromeScanResult: ChromeScanner.ChromeScanResult? = null,
-    // Overall
     val totalFlags: Int = 0,
     val verdict: String = "",
     val scanComplete: Boolean = false,
     val error: String? = null,
-    // Current screen
-    val currentScreen: String = "home" // home, minecraft, deleted, history
+    val currentScreen: String = "home",
+    val shizukuAvailable: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -41,336 +40,296 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _scanState = MutableStateFlow(ScanState())
     val scanState: StateFlow<ScanState> = _scanState.asStateFlow()
 
+    init {
+        val shizukuAvail = try { ShizukuHelper.isAvailable() } catch (_: Exception) { false }
+        _scanState.value = _scanState.value.copy(shizukuAvailable = shizukuAvail)
+    }
+
     fun setScreen(screen: String) {
         _scanState.value = _scanState.value.copy(currentScreen = screen)
     }
 
-    /**
-     * Called when user selects a folder via SAF folder picker.
-     * This is the MAIN scanning method — works on Android 12-16.
-     */
+    /** SAF folder scan — ALWAYS works on Android 12-16 non-root */
     fun onFolderSelected(context: Context, uri: Uri) {
         if (_scanState.value.isScanning) return
-
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _scanState.value = _scanState.value.copy(
                     isScanning = true, progress = 0f,
-                    currentTask = "Opening selected folder...",
-                    currentScreen = "minecraft",
+                    currentTask = "Membuka folder...", currentScreen = "minecraft",
                     safResult = null, modScanResults = emptyList(),
                     error = null, scanComplete = false
                 )
-
                 val result = SafScanner.scanFolder(context, uri) { progress, task ->
                     _scanState.value = _scanState.value.copy(progress = progress, currentTask = task)
                 }
-
                 val totalFlags = result.jarResults.count { it.flagged } + result.logFindings.size
-
                 _scanState.value = _scanState.value.copy(
-                    isScanning = false,
-                    progress = 1f,
-                    currentTask = "Scan complete!",
-                    safResult = result,
-                    modScanResults = result.jarResults,
+                    isScanning = false, progress = 1f, currentTask = "Scan selesai!",
+                    safResult = result, modScanResults = result.jarResults,
                     totalFlags = totalFlags,
                     verdict = if (totalFlags == 0) "CLEAN" else "FLAGGED",
-                    scanComplete = true,
-                    error = result.error
+                    scanComplete = true, error = result.error
                 )
             } catch (e: Exception) {
-                Log.e("MainViewModel", "SAF scan error: ${e.message}", e)
                 _scanState.value = _scanState.value.copy(
-                    isScanning = false,
-                    error = "Scan error: ${e.message}",
-                    currentTask = "Error",
-                    scanComplete = true,
-                    verdict = "ERROR"
+                    isScanning = false, error = "Scan error: ${e.message}",
+                    currentTask = "Error", scanComplete = true, verdict = "ERROR"
                 )
             }
         }
     }
 
     /**
-     * Auto-scan: tries direct file access for known launcher paths.
-     * Works if "All Files Access" is granted on Android 11+.
-     * Falls back to prompting user for SAF if nothing found.
+     * Auto-scan: supports non-root Android 12-16.
+     * Tries: Shizuku > MANAGE_EXTERNAL_STORAGE > direct accessible paths.
      */
     fun runAutoScan() {
         if (_scanState.value.isScanning) return
-
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val shizuku = try { ShizukuHelper.isAvailable() } catch (_: Exception) { false }
+                val allFiles = try { Environment.isExternalStorageManager() } catch (_: Exception) { false }
+
                 _scanState.value = _scanState.value.copy(
                     isScanning = true, progress = 0f,
-                    currentTask = "Auto-detecting Minecraft launchers...",
-                    currentScreen = "minecraft",
+                    currentTask = "Auto-detecting launcher...", currentScreen = "minecraft",
                     launcherResults = emptyList(), modScanResults = emptyList(),
-                    safResult = null, error = null, scanComplete = false
+                    safResult = null, error = null, scanComplete = false,
+                    shizukuAvailable = shizuku
+                )
+                updateProgress(0.05f, "Memeriksa akses storage...")
+
+                val foundPaths = mutableListOf<Pair<String, String>>()
+
+                // Candidate paths
+                val candidates = listOf(
+                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/.minecraft" to "Zalith Launcher",
+                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/instance" to "Zalith Launcher",
+                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/.minecraft" to "Zalith Launcher 2",
+                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/instance" to "Zalith Launcher 2",
+                    "/storage/emulated/0/Android/data/git.artdeell.mojo/files/.minecraft" to "Mojo Launcher",
+                    "/storage/emulated/0/Android/data/git.artdeell.mojo/files/instance" to "Mojo Launcher",
+                    "/storage/emulated/0/Android/data/net.kdt.pojavlaunch/files/.minecraft" to "PojavLauncher",
+                    "/storage/emulated/0/games/PojavLauncher/.minecraft" to "PojavLauncher",
+                    "/storage/emulated/0/Android/data/com.tungsten.fcl/files/.minecraft" to "Fold Craft Launcher",
+                    "/storage/emulated/0/FCL/.minecraft" to "Fold Craft Launcher",
+                    "/storage/emulated/0/Android/data/com.tungsten.hmclpe/files/.minecraft" to "HMCL-PE",
                 )
 
-                // Try direct file access for known paths
-                val knownPaths = listOf(
-                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/.minecraft",
-                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/.minecraft",
-                    "/storage/emulated/0/Android/data/git.artdeell.mojo/files/.minecraft",
-                    "/storage/emulated/0/Android/data/net.kdt.pojavlaunch/files/.minecraft",
-                    "/storage/emulated/0/Android/data/com.tungsten.fcl/files/.minecraft",
-                    "/storage/emulated/0/Android/data/com.tungsten.hmclpe/files/.minecraft",
-                    "/storage/emulated/0/games/PojavLauncher/.minecraft",
-                    "/storage/emulated/0/FCL/.minecraft",
-                )
-
-                val foundPaths = mutableListOf<String>()
-                for (path in knownPaths) {
+                for ((path, name) in candidates) {
                     try {
-                        val dir = File(path)
-                        if (dir.exists() && dir.isDirectory && dir.canRead()) {
-                            val modsDir = File(dir, "mods")
-                            if (modsDir.exists() || File(dir, "logs").exists()) {
-                                foundPaths.add(path)
-                                Log.i("MainViewModel", "Found accessible launcher at: $path")
-                            }
+                        val isAndroidData = path.contains("/Android/data/")
+                        val exists = when {
+                            shizuku && isAndroidData -> ShizukuHelper.directoryExists(path)
+                            allFiles -> File(path).exists() && File(path).isDirectory
+                            else -> File(path).let { it.exists() && it.isDirectory && it.canRead() }
                         }
-                    } catch (_: Exception) {}
-                }
+                        if (!exists) continue
 
-                // Also check instance dirs
-                val instanceBaseDirs = listOf(
-                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/instance",
-                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/instance",
-                    "/storage/emulated/0/Android/data/git.artdeell.mojo/files/instance",
-                )
-                for (instanceBase in instanceBaseDirs) {
-                    try {
-                        val dir = File(instanceBase)
-                        if (dir.exists() && dir.isDirectory && dir.canRead()) {
-                            dir.listFiles()?.filter { it.isDirectory }?.forEach { instance ->
-                                val mcDir = File(instance, ".minecraft")
-                                if (mcDir.exists() && mcDir.isDirectory && mcDir.canRead()) {
-                                    foundPaths.add(mcDir.absolutePath)
-                                    Log.i("MainViewModel", "Found instance: ${mcDir.absolutePath}")
+                        if (path.endsWith("/instance")) {
+                            // Enumerate instances
+                            val instances: List<String> = when {
+                                shizuku && isAndroidData -> ShizukuHelper.listFiles(path)
+                                allFiles -> File(path).listFiles()?.filter { it.isDirectory }?.map { it.name } ?: emptyList()
+                                else -> File(path).listFiles()?.filter { it.isDirectory && it.canRead() }?.map { it.name } ?: emptyList()
+                            }
+                            for (inst in instances) {
+                                val mcPath = "$path/$inst/.minecraft"
+                                val instRoot = "$path/$inst"
+                                val mcExists = when {
+                                    shizuku && isAndroidData -> ShizukuHelper.directoryExists(mcPath)
+                                    allFiles -> File(mcPath).exists()
+                                    else -> File(mcPath).let { it.exists() && it.canRead() }
+                                }
+                                if (mcExists) foundPaths.add(mcPath to "$name [$inst]")
+                                else {
+                                    val modsExists = when {
+                                        shizuku && isAndroidData -> ShizukuHelper.directoryExists("$instRoot/mods")
+                                        allFiles -> File("$instRoot/mods").exists()
+                                        else -> File("$instRoot/mods").let { it.exists() && it.canRead() }
+                                    }
+                                    if (modsExists) foundPaths.add(instRoot to "$name [$inst]")
                                 }
                             }
+                        } else {
+                            foundPaths.add(path to name)
                         }
                     } catch (_: Exception) {}
                 }
 
                 if (foundPaths.isEmpty()) {
+                    val reason = buildString {
+                        if (!shizuku && !allFiles) {
+                            append("Android 12+ memblokir akses /Android/data/ tanpa root/Shizuku.\n\n")
+                            append("Cara scan mods:\n")
+                            append("1. Tap 'Pilih Folder Minecraft'\n")
+                            append("2. Navigasi: Android > data > [nama_launcher] > files\n")
+                            append("3. Pilih folder .minecraft\n\n")
+                            append("Atau install Shizuku untuk auto-scan.")
+                        } else if (shizuku) {
+                            append("Shizuku aktif tapi tidak ada launcher ditemukan di path standar.")
+                        } else {
+                            append("All Files Access aktif tapi tidak ada launcher ditemukan.")
+                        }
+                    }
                     _scanState.value = _scanState.value.copy(
-                        isScanning = false,
-                        progress = 0f,
-                        currentTask = "",
-                        error = "No launchers found via direct access. Android 12+ blocks /Android/data/. " +
-                                "Please use 'Select Minecraft Folder' button to manually pick your .minecraft directory.",
-                        scanComplete = true,
-                        verdict = "NO_ACCESS"
+                        isScanning = false, progress = 0f, currentTask = "",
+                        error = reason, scanComplete = true, verdict = "NO_ACCESS"
                     )
                     return@launch
                 }
 
-                updateProgress(0.1f, "Found ${foundPaths.size} launcher path(s)")
+                updateProgress(0.1f, "Ditemukan ${foundPaths.size} lokasi launcher")
 
-                // Scan all found paths
                 val allModResults = mutableListOf<JarInspector.JarScanResult>()
                 val allLaunchers = mutableListOf<MinecraftScanner.LauncherScanResult>()
-                var totalMods = 0
-                var scannedMods = 0
 
                 // Count total mods first
-                for (path in foundPaths) {
-                    val modsDir = File(path, "mods")
-                    if (modsDir.exists() && modsDir.canRead()) {
-                        totalMods += modsDir.listFiles()?.count {
-                            it.isFile && it.extension.lowercase() in listOf("jar", "zip")
-                        } ?: 0
-                    }
+                var totalMods = 0
+                for ((path, _) in foundPaths.distinctBy { it.first }) {
+                    totalMods += listModsAtPath("$path/mods", shizuku, allFiles).size
                 }
 
-                for (path in foundPaths) {
-                    val launcherName = guessLauncherName(path)
-                    val modsDir = File(path, "mods")
-                    val logsDir = File(path, "logs")
-                    val versionsDir = File(path, "versions")
-
+                var scannedMods = 0
+                for ((path, launcherName) in foundPaths.distinctBy { it.first }) {
                     val mods = mutableListOf<MinecraftScanner.ModFileInfo>()
                     val logFindings = mutableListOf<MinecraftScanner.LogFinding>()
                     val versions = mutableListOf<String>()
 
-                    // Scan mods
-                    if (modsDir.exists() && modsDir.canRead()) {
-                        modsDir.listFiles()?.filter {
-                            it.isFile && it.canRead() && it.extension.lowercase() in listOf("jar", "zip")
-                        }?.forEach { modFile ->
-                            mods.add(MinecraftScanner.ModFileInfo(
-                                modFile.name, modFile.absolutePath,
-                                bytesToMb(modFile.length())
-                            ))
-                            try {
-                                val result = JarInspector.inspectJar(modFile)
-                                allModResults.add(result)
-                            } catch (e: Exception) {
-                                Log.e("MainViewModel", "Mod scan error: ${e.message}")
-                            }
-                            scannedMods++
-                            if (totalMods > 0) {
-                                updateProgress(0.1f + (0.7f * scannedMods / totalMods),
-                                    "Scanning: ${modFile.name} ($scannedMods/$totalMods)")
-                            }
-                        }
+                    val modFiles = listModsAtPath("$path/mods", shizuku, allFiles)
+                    for ((modName, modPath, modSizeMb) in modFiles) {
+                        mods.add(MinecraftScanner.ModFileInfo(modName, modPath, modSizeMb))
+                        if (modSizeMb > MAX_JAR_SIZE_MB) continue
+                        scannedMods++
+                        if (totalMods > 0) updateProgress(
+                            0.1f + (0.7f * scannedMods / totalMods),
+                            "Scanning: $modName ($scannedMods/$totalMods)"
+                        )
+                        try {
+                            val result = scanModFile(modPath, modName, shizuku)
+                            if (result != null) allModResults.add(result)
+                        } catch (_: Exception) {}
                     }
 
-                    // Scan logs
-                    if (logsDir.exists() && logsDir.canRead()) {
-                        scanLogsDirectly(logsDir, logFindings)
-                    }
-
-                    // Get versions
-                    if (versionsDir.exists() && versionsDir.canRead()) {
-                        versionsDir.listFiles()?.filter { it.isDirectory }?.forEach {
-                            versions.add(it.name)
-                        }
-                    }
+                    scanLogsAtPath("$path/logs", shizuku, allFiles, logFindings)
+                    versions.addAll(listVersionsAtPath("$path/versions", shizuku, allFiles))
 
                     allLaunchers.add(MinecraftScanner.LauncherScanResult(
                         name = launcherName, packageName = "",
-                        path = path, found = true, mods = mods,
-                        logFindings = logFindings, versions = versions,
-                        modsDir = if (modsDir.exists()) modsDir.absolutePath else null
+                        path = path, found = true,
+                        mods = mods, logFindings = logFindings, versions = versions,
+                        modsDir = "$path/mods"
                     ))
                 }
 
-                val totalFlags = allModResults.count { it.flagged } +
-                    allLaunchers.sumOf { it.logFindings.size }
-
+                val totalFlags = allModResults.count { it.flagged } + allLaunchers.sumOf { it.logFindings.size }
                 _scanState.value = _scanState.value.copy(
-                    isScanning = false, progress = 1f,
-                    currentTask = "Scan complete!",
-                    launcherResults = allLaunchers,
-                    modScanResults = allModResults,
+                    isScanning = false, progress = 1f, currentTask = "Scan selesai!",
+                    launcherResults = allLaunchers, modScanResults = allModResults,
                     totalFlags = totalFlags,
                     verdict = if (totalFlags == 0) "CLEAN" else "FLAGGED",
                     scanComplete = true
                 )
-
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Auto scan error: ${e.message}", e)
                 _scanState.value = _scanState.value.copy(
                     isScanning = false,
-                    error = "Auto scan error: ${e.message}. Try 'Select Minecraft Folder' instead.",
+                    error = "Auto scan error: ${e.message}. Coba 'Pilih Folder'.",
                     scanComplete = true, verdict = "ERROR"
                 )
             }
         }
     }
 
-    /**
-     * Scan deleted files
-     */
+    /** Deleted file scan — works WITHOUT root on Android 12-16 */
     fun runDeletedFileScan() {
         if (_scanState.value.isScanning) return
-
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _scanState.value = _scanState.value.copy(
                     isScanning = true, progress = 0f,
-                    currentTask = "Scanning for deleted/suspicious files...",
+                    currentTask = "Scanning file mencurigakan...",
                     currentScreen = "deleted",
                     deletedFileScanResult = null, error = null, scanComplete = false
                 )
-
-                updateProgress(0.1f, "Scanning Downloads...")
+                updateProgress(0.15f, "Scanning folder Download...")
                 val result = DeletedFileScanner.scanDeletedFiles(getApplication<Application>().cacheDir)
-
                 _scanState.value = _scanState.value.copy(
                     isScanning = false, progress = 1f,
-                    currentTask = "Deleted file scan complete!",
+                    currentTask = "Scan file terhapus selesai!",
                     deletedFileScanResult = result,
                     totalFlags = result.flaggedItems.size,
                     verdict = if (result.flaggedItems.isEmpty()) "CLEAN" else "FLAGGED",
                     scanComplete = true
                 )
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Deleted scan error: ${e.message}", e)
                 _scanState.value = _scanState.value.copy(
-                    isScanning = false,
-                    error = "Error: ${e.message}",
+                    isScanning = false, error = "Error: ${e.message}",
                     scanComplete = true, verdict = "ERROR"
                 )
             }
         }
     }
 
-    /**
-     * Scan Chrome history
-     */
+    /** Chrome/browser history scan */
     fun runHistoryScan() {
         if (_scanState.value.isScanning) return
-
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val shizuku = try { ShizukuHelper.isAvailable() } catch (_: Exception) { false }
                 _scanState.value = _scanState.value.copy(
                     isScanning = true, progress = 0f,
-                    currentTask = "Scanning browser history...",
+                    currentTask = "Scanning riwayat browser...",
                     currentScreen = "history",
-                    chromeScanResult = null, error = null, scanComplete = false
+                    chromeScanResult = null, error = null, scanComplete = false,
+                    shizukuAvailable = shizuku
                 )
-
-                updateProgress(0.3f, "Accessing Chrome database...")
+                updateProgress(0.3f, "Membaca database browser...")
                 val result = ChromeScanner.scanChromeHistory(getApplication())
-
+                val totalFlags = result.suspiciousUrls.size + result.suspiciousDownloads.size
                 _scanState.value = _scanState.value.copy(
-                    isScanning = false, progress = 1f,
-                    currentTask = "History scan complete!",
-                    chromeScanResult = result,
-                    totalFlags = result.suspiciousUrls.size + result.suspiciousDownloads.size,
-                    verdict = if (result.suspiciousUrls.isEmpty() && result.suspiciousDownloads.isEmpty()) "CLEAN" else "FLAGGED",
-                    scanComplete = true,
-                    error = result.error
+                    isScanning = false, progress = 1f, currentTask = "Scan history selesai!",
+                    chromeScanResult = result, totalFlags = totalFlags,
+                    verdict = if (totalFlags == 0) "CLEAN" else "FLAGGED",
+                    scanComplete = true, error = result.error
                 )
             } catch (e: Exception) {
-                Log.e("MainViewModel", "History scan error: ${e.message}", e)
                 _scanState.value = _scanState.value.copy(
-                    isScanning = false,
-                    error = "Error: ${e.message}",
+                    isScanning = false, error = "Error: ${e.message}",
                     scanComplete = true, verdict = "ERROR"
                 )
             }
         }
     }
 
-    /**
-     * Full scan: Minecraft + Deleted + History
-     */
+    /** Full scan: all modules combined */
     fun runFullScan() {
         if (_scanState.value.isScanning) return
-
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val shizuku = try { ShizukuHelper.isAvailable() } catch (_: Exception) { false }
+                val allFiles = try { Environment.isExternalStorageManager() } catch (_: Exception) { false }
+
                 _scanState.value = _scanState.value.copy(
-                    isScanning = true, progress = 0f,
-                    currentTask = "Starting full scan...",
+                    isScanning = true, progress = 0f, currentTask = "Memulai full scan...",
                     currentScreen = "minecraft",
                     launcherResults = emptyList(), modScanResults = emptyList(),
                     deletedFileScanResult = null, chromeScanResult = null,
-                    safResult = null, error = null, scanComplete = false
+                    safResult = null, error = null, scanComplete = false,
+                    shizukuAvailable = shizuku
                 )
 
-                // 1. Deleted files (always works)
-                updateProgress(0.05f, "Scanning deleted/suspicious files...")
+                // 1. Deleted files (always works without root)
+                updateProgress(0.05f, "Scanning file mencurigakan/terhapus...")
                 val deletedResult = try {
                     DeletedFileScanner.scanDeletedFiles(getApplication<Application>().cacheDir)
-                } catch (e: Exception) {
-                    DeletedFileScanner.DeletedFileScanResult(
-                        emptyList(), emptyList(), emptyList(), emptyList(),
-                        emptyList(), emptyList(), emptyList(), 0
-                    )
+                } catch (_: Exception) {
+                    DeletedFileScanner.DeletedFileScanResult(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 0)
                 }
                 _scanState.value = _scanState.value.copy(deletedFileScanResult = deletedResult)
 
                 // 2. Chrome history
-                updateProgress(0.2f, "Scanning browser history...")
+                updateProgress(0.2f, "Scanning riwayat browser...")
                 val chromeResult = try {
                     ChromeScanner.scanChromeHistory(getApplication())
                 } catch (e: Exception) {
@@ -378,85 +337,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _scanState.value = _scanState.value.copy(chromeScanResult = chromeResult)
 
-                // 3. Try auto-detect Minecraft launchers
+                // 3. Minecraft auto-detect
                 updateProgress(0.3f, "Auto-detecting Minecraft launchers...")
-                val knownPaths = listOf(
-                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/.minecraft",
-                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/.minecraft",
-                    "/storage/emulated/0/Android/data/git.artdeell.mojo/files/.minecraft",
-                    "/storage/emulated/0/Android/data/net.kdt.pojavlaunch/files/.minecraft",
-                    "/storage/emulated/0/Android/data/com.tungsten.fcl/files/.minecraft",
-                    "/storage/emulated/0/games/PojavLauncher/.minecraft",
-                    "/storage/emulated/0/FCL/.minecraft",
-                )
-
                 val allModResults = mutableListOf<JarInspector.JarScanResult>()
                 val allLaunchers = mutableListOf<MinecraftScanner.LauncherScanResult>()
                 var mcNote: String? = null
 
-                for (path in knownPaths) {
+                val mcPaths = listOf(
+                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher/files/.minecraft" to "Zalith Launcher",
+                    "/storage/emulated/0/Android/data/com.movtery.zalithlauncher2/files/.minecraft" to "Zalith Launcher 2",
+                    "/storage/emulated/0/Android/data/git.artdeell.mojo/files/.minecraft" to "Mojo Launcher",
+                    "/storage/emulated/0/Android/data/net.kdt.pojavlaunch/files/.minecraft" to "PojavLauncher",
+                    "/storage/emulated/0/Android/data/com.tungsten.fcl/files/.minecraft" to "Fold Craft Launcher",
+                    "/storage/emulated/0/games/PojavLauncher/.minecraft" to "PojavLauncher",
+                    "/storage/emulated/0/FCL/.minecraft" to "Fold Craft Launcher",
+                )
+
+                var modIdx = 0
+                val totalMods = mcPaths.sumOf { (p, _) -> listModsAtPath("$p/mods", shizuku, allFiles).size }
+
+                for ((path, launcherName) in mcPaths) {
                     try {
-                        val dir = File(path)
-                        if (dir.exists() && dir.isDirectory && dir.canRead()) {
-                            val launcherName = guessLauncherName(path)
-                            val modsDir = File(dir, "mods")
-                            val mods = mutableListOf<MinecraftScanner.ModFileInfo>()
-                            val logFindings = mutableListOf<MinecraftScanner.LogFinding>()
-
-                            if (modsDir.exists() && modsDir.canRead()) {
-                                modsDir.listFiles()?.filter {
-                                    it.isFile && it.canRead() && it.extension.lowercase() in listOf("jar", "zip")
-                                }?.forEach { modFile ->
-                                    mods.add(MinecraftScanner.ModFileInfo(
-                                        modFile.name, modFile.absolutePath,
-                                        bytesToMb(modFile.length())
-                                    ))
-                                    try { allModResults.add(JarInspector.inspectJar(modFile)) } catch (_: Exception) {}
-                                }
-                            }
-
-                            val logsDir = File(dir, "logs")
-                            if (logsDir.exists() && logsDir.canRead()) {
-                                scanLogsDirectly(logsDir, logFindings)
-                            }
-
-                            val versions = try {
-                                File(dir, "versions").listFiles()?.filter { it.isDirectory }?.map { it.name } ?: emptyList()
-                            } catch (_: Exception) { emptyList() }
-
-                            allLaunchers.add(MinecraftScanner.LauncherScanResult(
-                                name = launcherName, packageName = "", path = path,
-                                found = true, mods = mods, logFindings = logFindings,
-                                versions = versions, modsDir = modsDir.absolutePath
-                            ))
+                        val isAndroidData = path.contains("/Android/data/")
+                        val exists = when {
+                            shizuku && isAndroidData -> ShizukuHelper.directoryExists(path)
+                            allFiles -> File(path).exists()
+                            else -> File(path).let { it.exists() && it.canRead() }
                         }
+                        if (!exists) continue
+
+                        val mods = mutableListOf<MinecraftScanner.ModFileInfo>()
+                        val logFindings = mutableListOf<MinecraftScanner.LogFinding>()
+                        val modFiles = listModsAtPath("$path/mods", shizuku, allFiles)
+                        for ((modName, modPath, modSizeMb) in modFiles) {
+                            mods.add(MinecraftScanner.ModFileInfo(modName, modPath, modSizeMb))
+                            if (modSizeMb <= MAX_JAR_SIZE_MB) {
+                                modIdx++
+                                if (totalMods > 0) updateProgress(
+                                    0.3f + (0.5f * modIdx / totalMods),
+                                    "Scanning: $modName ($modIdx/$totalMods)"
+                                )
+                                try {
+                                    val result = scanModFile(modPath, modName, shizuku)
+                                    if (result != null) allModResults.add(result)
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        scanLogsAtPath("$path/logs", shizuku, allFiles, logFindings)
+                        val versions = listVersionsAtPath("$path/versions", shizuku, allFiles)
+                        allLaunchers.add(MinecraftScanner.LauncherScanResult(
+                            name = launcherName, packageName = "",
+                            path = path, found = true,
+                            mods = mods, logFindings = logFindings, versions = versions,
+                            modsDir = "$path/mods"
+                        ))
                     } catch (_: Exception) {}
                 }
 
-                if (allLaunchers.isEmpty()) {
-                    mcNote = "No Minecraft launchers found via auto-detect. Use 'Select Minecraft Folder' for /Android/data/ access."
+                if (allLaunchers.isEmpty() && !shizuku && !allFiles) {
+                    mcNote = "Tidak bisa auto-detect Minecraft (Android 12+ blokir /Android/data/).\nGunakan 'Pilih Folder Minecraft' untuk scan mod."
                 }
 
                 _scanState.value = _scanState.value.copy(launcherResults = allLaunchers, modScanResults = allModResults)
 
-                // Calculate verdict
-                var totalFlags = 0
-                totalFlags += allModResults.count { it.flagged }
+                var totalFlags = allModResults.count { it.flagged }
                 totalFlags += allLaunchers.sumOf { it.logFindings.size }
                 totalFlags += deletedResult.flaggedItems.size
                 totalFlags += chromeResult.suspiciousUrls.size + chromeResult.suspiciousDownloads.size
 
                 _scanState.value = _scanState.value.copy(
-                    isScanning = false, progress = 1f,
-                    currentTask = "Full scan complete!",
+                    isScanning = false, progress = 1f, currentTask = "Full scan selesai!",
                     totalFlags = totalFlags,
                     verdict = if (totalFlags == 0) "CLEAN" else "FLAGGED",
-                    scanComplete = true,
-                    error = mcNote
+                    scanComplete = true, error = mcNote
                 )
-
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Full scan error: ${e.message}", e)
                 _scanState.value = _scanState.value.copy(
                     isScanning = false, error = "Error: ${e.message}",
                     scanComplete = true, verdict = "ERROR"
@@ -466,58 +421,125 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetScan() {
-        _scanState.value = ScanState()
+        val shizuku = try { ShizukuHelper.isAvailable() } catch (_: Exception) { false }
+        _scanState.value = ScanState(shizukuAvailable = shizuku)
     }
 
     private fun updateProgress(progress: Float, task: String) {
         _scanState.value = _scanState.value.copy(progress = progress, currentTask = task)
     }
 
-    private fun guessLauncherName(path: String): String = when {
-        "zalithlauncher2" in path -> "Zalith Launcher 2"
-        "zalithlauncher" in path -> "Zalith Launcher"
-        "artdeell.mojo" in path || "mojo" in path.lowercase() -> "Mojo Launcher"
-        "pojavlaunch" in path || "PojavLauncher" in path -> "PojavLauncher"
-        "tungsten.fcl" in path || "FCL" in path -> "Fold Craft Launcher"
-        "hmclpe" in path -> "HMCL-PE"
-        else -> "Minecraft"
+    // ── Scan a single mod file (Shizuku copy or direct) ──
+    private fun scanModFile(modPath: String, modName: String, useShizuku: Boolean): JarInspector.JarScanResult? {
+        val isAndroidData = modPath.contains("/Android/data/")
+        return if (useShizuku && isAndroidData) {
+            val tmp = ShizukuHelper.copyToCache(modPath, getApplication<Application>().cacheDir)
+            if (tmp != null) {
+                val r = JarInspector.inspectJar(tmp)
+                tmp.delete()
+                r.copy(path = modPath, filename = modName)
+            } else null
+        } else {
+            val f = File(modPath)
+            if (f.exists() && f.canRead()) JarInspector.inspectJar(f) else null
+        }
     }
 
-    private fun scanLogsDirectly(logsDir: File, findings: MutableList<MinecraftScanner.LogFinding>) {
-        val patterns = listOf(
-            "meteor-client" to "critical", "meteorclient" to "critical",
-            "wurstclient" to "critical", "impactclient" to "critical",
-            "aristois" to "critical", "liquidbounce" to "critical",
-            "futureclient" to "critical", "rusherhack" to "critical",
-            "thunderhack" to "critical", "bleachhack" to "critical",
-            "coffeeclient" to "critical", "phobos" to "critical",
-            "konas" to "critical", "gamesense" to "critical",
-            "salhack" to "critical", "forgehax" to "critical",
-            "3arthh4ck" to "critical", "earthhack" to "critical",
-            "sigmaclient" to "critical",
-            "Loading module: KillAura" to "critical",
-            "Loading module: AutoCrystal" to "critical",
-            "Loading module: AimAssist" to "critical",
-            "clickgui" to "high", "ClickGUI" to "high",
-            "Injecting into" to "critical",
-        )
+    // ── List mod files as triple (name, path, sizeMb) ──
+    private data class ModInfo(val name: String, val path: String, val sizeMb: Float)
 
+    private fun listModsAtPath(modsPath: String, useShizuku: Boolean, hasAllFiles: Boolean): List<ModInfo> {
+        return try {
+            val isAndroidData = modsPath.contains("/Android/data/")
+            when {
+                useShizuku && isAndroidData -> {
+                    ShizukuHelper.listFilesDetailed(modsPath)
+                        .filter { !it.isDirectory && it.name.lowercase().let { n -> n.endsWith(".jar") || n.endsWith(".zip") } }
+                        .map { ModInfo(it.name, "$modsPath/${it.name}", bytesToMb(it.size)) }
+                }
+                else -> {
+                    val dir = File(modsPath)
+                    if (!dir.exists()) return emptyList()
+                    val readable = if (hasAllFiles) dir.exists() else dir.canRead()
+                    if (!readable) return emptyList()
+                    dir.listFiles()
+                        ?.filter { it.isFile && it.extension.lowercase() in listOf("jar", "zip") }
+                        ?.map { ModInfo(it.name, it.absolutePath, bytesToMb(it.length())) }
+                        ?: emptyList()
+                }
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun listVersionsAtPath(versionsPath: String, useShizuku: Boolean, hasAllFiles: Boolean): List<String> {
+        return try {
+            val isAndroidData = versionsPath.contains("/Android/data/")
+            when {
+                useShizuku && isAndroidData -> {
+                    ShizukuHelper.listFilesDetailed(versionsPath).filter { it.isDirectory }.map { it.name }
+                }
+                else -> {
+                    val dir = File(versionsPath)
+                    if (!dir.exists()) return emptyList()
+                    dir.listFiles()?.filter { it.isDirectory }?.map { it.name } ?: emptyList()
+                }
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private val LOG_PATTERNS = listOf(
+        "meteor-client" to "critical", "meteorclient" to "critical",
+        "wurstclient" to "critical", "impactclient" to "critical",
+        "aristois" to "critical", "liquidbounce" to "critical",
+        "futureclient" to "critical", "rusherhack" to "critical",
+        "thunderhack" to "critical", "bleachhack" to "critical",
+        "coffeeclient" to "critical", "phobos" to "critical",
+        "konas" to "critical", "gamesense" to "critical",
+        "salhack" to "critical", "forgehax" to "critical",
+        "3arthh4ck" to "critical", "earthhack" to "critical",
+        "sigmaclient" to "critical", "inertiaclient" to "critical",
+        "Loading module: KillAura" to "critical",
+        "Loading module: AutoCrystal" to "critical",
+        "Loading module: AimAssist" to "critical",
+        "Loading module: Triggerbot" to "critical",
+        "Loading module: Scaffold" to "critical",
+        "Loading module: Xray" to "critical",
+        "clickgui" to "high", "ClickGUI" to "high",
+        "Injecting into" to "critical", "injection successful" to "critical",
+    )
+
+    private fun scanLogsAtPath(
+        logsPath: String, useShizuku: Boolean, hasAllFiles: Boolean,
+        findings: MutableList<MinecraftScanner.LogFinding>
+    ) {
         try {
-            val logFiles = logsDir.listFiles()?.filter { it.isFile && it.extension == "log" }
-                ?.sortedByDescending { it.name == "latest.log" }
-                ?.take(10) ?: return
-
-            for (logFile in logFiles) {
+            val isAndroidData = logsPath.contains("/Android/data/")
+            val logNames: List<String> = when {
+                useShizuku && isAndroidData ->
+                    ShizukuHelper.listFiles(logsPath).filter { it.endsWith(".log") }.take(10)
+                else -> {
+                    val dir = File(logsPath)
+                    if (!dir.exists()) return
+                    dir.listFiles()?.filter { it.isFile && it.extension == "log" }?.map { it.name }?.take(10) ?: return
+                }
+            }
+            for (logName in logNames.sortedByDescending { it == "latest.log" }) {
                 try {
-                    val content = logFile.readText(Charsets.UTF_8).take(5 * 1024 * 1024)
-                    val contentLower = content.lowercase()
-                    for ((pattern, severity) in patterns) {
-                        if (pattern.lowercase() in contentLower) {
+                    val content: String = when {
+                        useShizuku && isAndroidData ->
+                            ShizukuHelper.readTextFile("$logsPath/$logName") ?: continue
+                        else -> {
+                            val f = File("$logsPath/$logName")
+                            if (!f.exists()) continue
+                            f.readText(Charsets.UTF_8).take(5 * 1024 * 1024)
+                        }
+                    }
+                    val lower = content.lowercase()
+                    for ((pattern, severity) in LOG_PATTERNS) {
+                        if (pattern.lowercase() in lower) {
                             content.split("\n").forEachIndexed { i, line ->
                                 if (pattern.lowercase() in line.lowercase()) {
-                                    findings.add(MinecraftScanner.LogFinding(
-                                        logFile.name, i + 1, line.trim().take(300), pattern, severity
-                                    ))
+                                    findings.add(MinecraftScanner.LogFinding(logName, i + 1, line.trim().take(300), pattern, severity))
                                     return@forEachIndexed
                                 }
                             }
