@@ -257,7 +257,7 @@ fun ProgressSection(state: ScanState) {
             }
             Spacer(Modifier.height(16.dp))
             LinearProgressIndicator(
-                progress = { state.progress },
+                progress = state.progress,
                 modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
                 color = Purple,
                 trackColor = DarkBorder,
@@ -397,7 +397,7 @@ fun ModResultCard(mod: JarInspector.JarScanResult) {
 
             if (mod.detections.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
-                HorizontalDivider(color = DarkBorder)
+                Divider(color = DarkBorder, thickness = 1.dp)
                 Spacer(Modifier.height(8.dp))
                 for (d in mod.detections) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 3.dp)) {
