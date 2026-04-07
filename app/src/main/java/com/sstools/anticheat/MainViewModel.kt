@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sstools.anticheat.scanner.*
+import com.sstools.anticheat.scanner.ShizukuHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -114,13 +115,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val totalMods = launchers.sumOf { it.mods.size }
                 var scannedMods = 0
 
+                val useShizuku = ShizukuHelper.isAvailable()
+                val cacheDir = getApplication<Application>().cacheDir
+
                 for (launcher in launchers) {
                     for (mod in launcher.mods) {
                         try {
-                            val file = File(mod.path)
-                            if (file.exists() && file.canRead()) {
-                                val result = JarInspector.inspectJar(file)
+                            val fileToScan = getModFileForScan(mod.path, useShizuku, cacheDir)
+                            if (fileToScan != null) {
+                                val result = JarInspector.inspectJar(fileToScan)
                                 allModResults.add(result)
+                                // Clean up temp copy
+                                if (fileToScan.absolutePath.startsWith(cacheDir.absolutePath)) {
+                                    fileToScan.delete()
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e("MainViewModel", "Mod scan error ${mod.name}: ${e.message}")
@@ -214,12 +222,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val totalMods = launchers.sumOf { it.mods.size }
                 var scannedMods = 0
 
+                val useShizuku2 = ShizukuHelper.isAvailable()
+                val cacheDir2 = getApplication<Application>().cacheDir
+
                 for (launcher in launchers) {
                     for (mod in launcher.mods) {
                         try {
-                            val file = File(mod.path)
-                            if (file.exists() && file.canRead()) {
-                                allModResults.add(JarInspector.inspectJar(file))
+                            val fileToScan = getModFileForScan(mod.path, useShizuku2, cacheDir2)
+                            if (fileToScan != null) {
+                                allModResults.add(JarInspector.inspectJar(fileToScan))
+                                if (fileToScan.absolutePath.startsWith(cacheDir2.absolutePath)) {
+                                    fileToScan.delete()
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e("MainViewModel", "Mod scan error: ${e.message}")
@@ -263,6 +277,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             shizukuAvailable = _scanState.value.shizukuAvailable,
             shizukuGranted = _scanState.value.shizukuGranted
         )
+    }
+
+    /**
+     * Get a readable File for a mod path.
+     * If the path is in /Android/data/ (protected), uses Shizuku to copy it to cache.
+     * Otherwise uses direct File access.
+     */
+    private fun getModFileForScan(modPath: String, useShizuku: Boolean, cacheDir: File): File? {
+        // Try direct access first
+        val directFile = File(modPath)
+        if (directFile.exists() && directFile.canRead() && directFile.length() > 0) {
+            return directFile
+        }
+
+        // If direct access failed and Shizuku is available, copy via Shizuku
+        if (useShizuku) {
+            Log.d("MainViewModel", "Copying via Shizuku: $modPath")
+            val copied = ShizukuHelper.copyToCache(modPath, cacheDir)
+            if (copied != null) {
+                Log.d("MainViewModel", "Copied to ${copied.absolutePath} (${copied.length()} bytes)")
+                return copied
+            }
+        }
+
+        Log.d("MainViewModel", "Cannot access mod: $modPath")
+        return null
     }
 
     private fun updateProgress(progress: Float, task: String) {

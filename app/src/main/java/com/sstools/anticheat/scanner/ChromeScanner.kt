@@ -9,8 +9,8 @@ import java.util.*
 
 /**
  * Chrome / Browser History Scanner for Android
- * All operations wrapped in try-catch to prevent crashes.
- * Chrome DB access requires Shizuku or root — gracefully fails if unavailable.
+ * Uses Shizuku to copy Chrome's History DB from /data/data/ to app cache,
+ * then reads it with SQLite. Falls back gracefully if Shizuku unavailable.
  */
 object ChromeScanner {
 
@@ -62,6 +62,16 @@ object ChromeScanner {
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
+    // Chrome DB locations (in /data/data/ — requires Shizuku or root)
+    private val CHROME_DB_PATHS = listOf(
+        "/data/data/com.android.chrome/app_chrome/Default/History",
+        "/data/data/com.android.chrome/app_chrome/Profile 1/History",
+        "/data/data/com.chrome.beta/app_chrome/Default/History",
+        "/data/data/com.brave.browser/app_chrome/Default/History",
+        "/data/data/com.microsoft.emmx/app_chrome/Default/History",
+        "/data/data/com.opera.browser/app_chrome/Default/History",
+    )
+
     fun scanChromeHistory(context: Context): ChromeScanResult {
         val suspiciousUrls = mutableListOf<SuspiciousUrl>()
         val suspiciousDownloads = mutableListOf<SuspiciousDownload>()
@@ -70,30 +80,44 @@ object ChromeScanner {
         var profilesFound = 0
         var errorMsg: String? = null
 
-        val dbPaths = getChromeDbPaths()
-        profilesFound = dbPaths.size
+        val useShizuku = ShizukuHelper.isAvailable()
+        Log.i(TAG, "scanChromeHistory: Shizuku=$useShizuku")
 
-        if (dbPaths.isEmpty()) {
-            // Chrome DB files are in /data/data/ which requires root or Shizuku
-            // On non-rooted devices without proper Shizuku IPC, we can't read them
-            errorMsg = "Browser history requires Shizuku with proper IPC or root access. " +
-                       "Chrome databases are in protected /data/data/ directory."
-            Log.d(TAG, errorMsg)
+        if (!useShizuku) {
+            return ChromeScanResult(0, emptyList(), emptyList(), 0, 0,
+                "Chrome history scan requires Shizuku (Chrome DB is in /data/data/ protected directory)")
         }
 
-        for (dbPath in dbPaths) {
+        // Use Shizuku to find and copy Chrome DB files
+        for (dbPath in CHROME_DB_PATHS) {
             var tempDb: File? = null
             try {
-                val sourceFile = File(dbPath)
-                if (!sourceFile.exists() || !sourceFile.canRead()) {
-                    Log.d(TAG, "Cannot read Chrome DB: $dbPath")
+                // Check if the DB file exists via Shizuku
+                if (!ShizukuHelper.fileExists(dbPath)) {
+                    continue
+                }
+                profilesFound++
+                Log.i(TAG, "Found Chrome DB: $dbPath")
+
+                // Copy to app cache via Shizuku
+                tempDb = File(context.cacheDir, "chrome_${System.currentTimeMillis()}.db")
+                val copied = ShizukuHelper.copyFile(dbPath, tempDb.absolutePath)
+                if (!copied || !tempDb.exists() || tempDb.length() == 0L) {
+                    Log.e(TAG, "Failed to copy Chrome DB from $dbPath")
                     continue
                 }
 
-                // Copy to temp to avoid locks
-                tempDb = File(context.cacheDir, "chrome_history_${System.currentTimeMillis()}.db")
-                sourceFile.copyTo(tempDb, overwrite = true)
+                // Also copy WAL and SHM files if they exist (for consistent reads)
+                val walPath = "$dbPath-wal"
+                val shmPath = "$dbPath-shm"
+                if (ShizukuHelper.fileExists(walPath)) {
+                    ShizukuHelper.copyFile(walPath, "${tempDb.absolutePath}-wal")
+                }
+                if (ShizukuHelper.fileExists(shmPath)) {
+                    ShizukuHelper.copyFile(shmPath, "${tempDb.absolutePath}-shm")
+                }
 
+                // Open and read the DB
                 val db = SQLiteDatabase.openDatabase(
                     tempDb.absolutePath, null,
                     SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
@@ -161,12 +185,22 @@ object ChromeScanner {
                 }
 
                 db.close()
+                Log.i(TAG, "Scanned $dbPath: $totalUrls URLs, $totalDownloads downloads")
+
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing Chrome DB $dbPath: ${e.message}")
-                if (errorMsg == null) errorMsg = "Error reading browser DB: ${e.message}"
+                if (errorMsg == null) errorMsg = "Error: ${e.message}"
             } finally {
-                try { tempDb?.delete() } catch (_: Exception) {}
+                try {
+                    tempDb?.delete()
+                    File("${tempDb?.absolutePath}-wal").delete()
+                    File("${tempDb?.absolutePath}-shm").delete()
+                } catch (_: Exception) {}
             }
+        }
+
+        if (profilesFound == 0) {
+            errorMsg = "No Chrome/browser databases found (checked ${CHROME_DB_PATHS.size} locations via Shizuku)"
         }
 
         return ChromeScanResult(
@@ -177,31 +211,6 @@ object ChromeScanner {
             totalDownloadsScanned = totalDownloads,
             error = errorMsg
         )
-    }
-
-    private fun getChromeDbPaths(): List<String> {
-        val paths = mutableListOf<String>()
-        val candidates = listOf(
-            "/data/data/com.android.chrome/app_chrome/Default/History",
-            "/data/data/com.android.chrome/app_chrome/Profile 1/History",
-            "/data/data/com.chrome.beta/app_chrome/Default/History",
-            "/data/data/com.brave.browser/app_chrome/Default/History",
-            "/data/data/com.microsoft.emmx/app_chrome/Default/History",
-            "/data/data/com.opera.browser/app_chrome/Default/History",
-        )
-
-        for (path in candidates) {
-            try {
-                val file = File(path)
-                if (file.exists() && file.canRead()) {
-                    paths.add(path)
-                }
-            } catch (_: Exception) {
-                // Expected on non-rooted devices
-            }
-        }
-
-        return paths
     }
 
     private fun chromeTimestampToString(timestamp: Long): String {
