@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainScreen(
                         viewModel = viewModel,
-                        onSelectFolder = { openFolderPicker() },
+                        onSelectFolder = { path -> openFolderPicker(path) },
                         onRequestStorage = { requestStoragePermissions() }
                     )
                 }

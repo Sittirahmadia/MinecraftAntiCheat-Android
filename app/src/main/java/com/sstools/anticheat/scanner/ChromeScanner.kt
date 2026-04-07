@@ -58,6 +58,10 @@ object ChromeScanner {
         "wizardhax.com", "mc-hacks", "ghostclient",
         "thunderhack", "bleachhack", "coffeeclient",
         "inertiaclient", "forgehax", "salhack",
+        "vape.gg", "dream.help", "entropy.club", "itami.io",
+        "whiteout.lol", "antic.lol", "skilled.club", "juul.lol",
+        "astolfo.lgbt", "novoline.wtf", "riseclient.com",
+        "tenacity.dev", "moonclient.xyz", "flux.today",
     )
 
     private val SUSPICIOUS_DOWNLOAD_PATTERNS = listOf(
@@ -68,7 +72,9 @@ object ChromeScanner {
         "earthhack", "salhack", "forgehax", "bleachhack",
         "thunderhack", "coffeeclient", "injector", "cheatengine",
         "aimassist", "killaura", "triggerbot", "inertiaclient",
-        "xray-client", "scaffold-mod",
+        "xray-client", "scaffold-mod", "vape", "entropy", "whiteout",
+        "skilled", "juul", "astolfo", "novoline", "riseclient",
+        "tenacity", "moonclient", "flux", "raven-b", "raven-ni",
     )
 
     // Chrome DB locations — require Shizuku or root

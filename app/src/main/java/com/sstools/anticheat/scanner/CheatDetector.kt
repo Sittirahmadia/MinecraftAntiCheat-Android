@@ -61,6 +61,10 @@ object CheatDetector {
         "worldedit", "axiom", "voicechat", "plasmovoice",
         "simplevoicechat", "emotecraft", "spark", "bobby",
         "distanthorizons", "distant-horizons", "c2me", "noisium",
+        "badoptimizations", "fastload", "krypton", "starlight",
+        "viafabric", "viaversion", "viabackwards", "viarewind",
+        "multiconnect", "connectivity", "no-chat-reports",
+        "invview", "shulkertooltip", "inventoryhud", "durabilitytooltip",
     )
 
     // ── MOD AUTHENTICITY FINGERPRINTS ──
@@ -162,12 +166,12 @@ object CheatDetector {
             "Increases movement speed beyond normal",
             classPatterns = listOf("Speed.class", "SpeedHack.class", "BHop.class"),
             stringPatterns = listOf("speedHack", "speedMode", "speedValue", "speedBoost", "bhop", "bunnyHop", "timerSpeed", "speedBypass"),
-            minMatches = 3),
+            minMatches = 4),
         CheatSignature("Fly Hack", "Movement", "critical",
             "Allows flying in survival mode",
             classPatterns = listOf("Fly.class", "FlyHack.class", "Flight.class"),
             stringPatterns = listOf("flyHack", "flySpeed", "flyMode", "flightSpeed", "flyGlide", "flyBypass", "flyAntiKick"),
-            minMatches = 3),
+            minMatches = 4),
         CheatSignature("NoFall", "Movement", "high",
             "Prevents fall damage",
             classPatterns = listOf("NoFall.class", "AntiFall.class"),

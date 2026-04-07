@@ -49,7 +49,7 @@ private val BorderColor = Color(0xFF232636)
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
-    onSelectFolder: () -> Unit,
+    onSelectFolder: (String?) -> Unit,
     onRequestStorage: () -> Unit
 ) {
     val state by viewModel.scanState.collectAsState()
@@ -132,7 +132,7 @@ fun MainScreen(
 fun HomeScreen(
     viewModel: MainViewModel,
     state: ScanState,
-    onSelectFolder: () -> Unit,
+    onSelectFolder: (String?) -> Unit,
     padding: PaddingValues
 ) {
     LazyColumn(
@@ -191,14 +191,14 @@ fun HomeScreen(
                         modifier = Modifier.horizontalScroll(rememberScrollState())
                     ) {
                         launchers.forEach { (name, path) ->
-                            LauncherShortcutChip(name, path, onSelectFolder)
+                            LauncherShortcutChip(name, path) { onSelectFolder(path) }
                         }
                     }
 
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
-                            onClick = onSelectFolder,
+                            onClick = { onSelectFolder(null) },
                             modifier = Modifier.weight(1f).height(46.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = AccentBlue
@@ -346,7 +346,7 @@ private fun LauncherGrid() {
 fun MinecraftResultsScreen(
     viewModel: MainViewModel,
     state: ScanState,
-    onSelectFolder: () -> Unit,
+    onSelectFolder: (String?) -> Unit,
     padding: PaddingValues
 ) {
     LazyColumn(

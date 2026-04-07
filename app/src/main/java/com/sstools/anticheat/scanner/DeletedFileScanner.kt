@@ -55,6 +55,9 @@ object DeletedFileScanner {
         "crystalmacro", "autoclicker", "killaura", "aimassist",
         "triggerbot", "cheatengine", "gameguardian", "injector",
         "xray", "nuker", "scaffold", "inertiaclient",
+        "vape", "entropy", "whiteout", "skilled", "juul", "astolfo",
+        "novoline", "riseclient", "tenacity", "moonclient", "flux",
+        "raven-b", "raven-ni", "itami", "antic", "skilled",
     )
 
     fun scanDeletedFiles(cacheDir: File? = null): DeletedFileScanResult {

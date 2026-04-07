@@ -82,10 +82,36 @@ object SafScanner {
         val versionsFound = mutableListOf<String>()
         val jarResults = mutableListOf<JarInspector.JarScanResult>()
 
-        // Look for mods directory
-        val modsDir = findSubDir(rootDoc, "mods")
-        if (modsDir != null) {
-            onProgress(0.1f, "Scanning mods folder...")
+        // Recursive search for mods, logs, and versions
+        val modsDirs = mutableListOf<DocumentFile>()
+        val logsDirs = mutableListOf<DocumentFile>()
+        val versionsDirs = mutableListOf<DocumentFile>()
+
+        fun findDirs(dir: DocumentFile, depth: Int) {
+            if (depth > 3) return
+            dir.listFiles().forEach { file ->
+                if (file.isDirectory) {
+                    when (file.name?.lowercase()) {
+                        "mods" -> modsDirs.add(file)
+                        "logs" -> logsDirs.add(file)
+                        "versions" -> versionsDirs.add(file)
+                        else -> findDirs(file, depth + 1)
+                    }
+                }
+            }
+        }
+
+        // Check if root itself is one of the targets
+        when (rootDoc.name?.lowercase()) {
+            "mods" -> modsDirs.add(rootDoc)
+            "logs" -> logsDirs.add(rootDoc)
+            "versions" -> versionsDirs.add(rootDoc)
+            else -> findDirs(rootDoc, 0)
+        }
+
+        // 1. Process all mods directories
+        modsDirs.forEach { modsDir ->
+            onProgress(0.1f, "Scanning mods in ${modsDir.name}...")
             val modFiles = modsDir.listFiles()
             val modCount = modFiles.size
             var scanned = 0
@@ -99,19 +125,15 @@ object SafScanner {
                         modsFound.add(SafModFile(name, modFile.uri.toString(), roundMb(sizeMb)))
                         totalScanned++
                         scanned++
-                        onProgress(0.1f + (0.6f * scanned / maxOf(modCount, 1)), "Inspecting: $name ($scanned/$modCount)")
+                        onProgress(0.1f + (0.6f * scanned / maxOf(modCount, 1)), "Inspecting: $name")
 
-                        // Skip files over 20000MB
-                        if (sizeMb > 20000f) {
-                            Log.w(TAG, "Skipping $name: too large (${sizeMb}MB)")
-                            continue
-                        }
+                        if (sizeMb > 20000f) continue
 
                         try {
                             val tempFile = copyToCache(context, modFile)
                             if (tempFile != null) {
                                 val result = JarInspector.inspectJar(tempFile)
-                                jarResults.add(result)
+                                jarResults.add(result.copy(filename = name))
                                 tempFile.delete()
                             }
                         } catch (e: Exception) {
@@ -120,59 +142,25 @@ object SafScanner {
                     }
                 }
             }
-            Log.i(TAG, "Found ${modsFound.size} mods")
-        } else {
-            Log.d(TAG, "No mods directory found")
-            // Maybe user selected a parent dir — search recursively
-            val subDirs = rootDoc.listFiles().filter { it.isDirectory }
-            for (subDir in subDirs) {
-                val subMods = findSubDir(subDir, "mods")
-                if (subMods != null) {
-                    onProgress(0.1f, "Found mods in ${subDir.name}/mods")
-                    for (modFile in subMods.listFiles()) {
-                        if (modFile.isFile) {
-                            val name = modFile.name ?: continue
-                            val ext = name.substringAfterLast('.', "").lowercase()
-                            if (ext in listOf("jar", "zip")) {
-                                val sizeMb = modFile.length().toFloat() / (1024 * 1024)
-                                modsFound.add(SafModFile(name, modFile.uri.toString(), roundMb(sizeMb)))
-                                totalScanned++
-                                try {
-                                    val tempFile = copyToCache(context, modFile)
-                                    if (tempFile != null) {
-                                        jarResults.add(JarInspector.inspectJar(tempFile))
-                                        tempFile.delete()
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Error: ${e.message}")
-                                }
-                            }
-                        }
-                    }
-                    break
-                }
-            }
         }
 
-        // Look for logs directory
-        onProgress(0.75f, "Scanning logs...")
-        val logsDir = findSubDir(rootDoc, "logs")
-        if (logsDir != null) {
+        // 2. Process all logs directories
+        logsDirs.forEach { logsDir ->
+            onProgress(0.75f, "Scanning logs in ${logsDir.name}...")
             scanLogsDir(context, logsDir, logFindings)
-            totalScanned += logFindings.size
         }
+        totalScanned += logFindings.size
 
-        // Look for versions directory
-        onProgress(0.85f, "Checking versions...")
-        val versionsDir = findSubDir(rootDoc, "versions")
-        if (versionsDir != null) {
+        // 3. Process all versions directories
+        versionsDirs.forEach { versionsDir ->
+            onProgress(0.85f, "Checking versions in ${versionsDir.name}...")
             for (versionDir in versionsDir.listFiles()) {
                 if (versionDir.isDirectory) {
                     versionsFound.add(versionDir.name ?: "unknown")
                 }
             }
-            totalScanned += versionsFound.size
         }
+        totalScanned += versionsFound.size
 
         onProgress(0.95f, "Generating report...")
         Log.i(TAG, "Scan complete: ${modsFound.size} mods, ${logFindings.size} log findings, ${versionsFound.size} versions")
