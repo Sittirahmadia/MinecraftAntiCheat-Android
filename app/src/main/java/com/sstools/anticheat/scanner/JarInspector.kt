@@ -192,7 +192,7 @@ object JarInspector {
         return JarScanResult(
             path = jarFile.path,
             filename = filename,
-            sizeMb = "%.2f".format(sizeMb).toFloat(),
+            sizeMb = roundMb(sizeMb),
             classFiles = classFiles.take(200),
             textFiles = textFiles,
             totalEntries = totalEntries,

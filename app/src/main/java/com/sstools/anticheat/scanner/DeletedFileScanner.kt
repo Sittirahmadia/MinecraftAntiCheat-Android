@@ -184,7 +184,7 @@ object DeletedFileScanner {
                         val sf = SuspiciousFile(
                             filename = fileInfo.name,
                             path = fullPath,
-                            sizeMb = try { "%.2f".format(fileInfo.size.toFloat() / (1024 * 1024)).toFloat() } catch (_: Exception) { 0f },
+                            sizeMb = bytesToMb(fileInfo.size),
                             lastModified = "Unknown",
                             source = source,
                             detections = CheatDetector.detectCheats(
@@ -258,7 +258,7 @@ object DeletedFileScanner {
                     val sf = SuspiciousFile(
                         filename = filename,
                         path = filePath,
-                        sizeMb = try { "%.2f".format(size.toFloat() / (1024 * 1024)).toFloat() } catch (_: Exception) { 0f },
+                        sizeMb = bytesToMb(size),
                         lastModified = dateOutput?.trim()?.take(19) ?: "Unknown",
                         source = "Recent File",
                         detections = CheatDetector.detectCheats(
@@ -364,7 +364,7 @@ object DeletedFileScanner {
         return SuspiciousFile(
             filename = file.name,
             path = file.absolutePath,
-            sizeMb = try { "%.2f".format(file.length().toFloat() / (1024 * 1024)).toFloat() } catch (_: Exception) { 0f },
+            sizeMb = try { bytesToMb(file.length()) } catch (_: Exception) { 0f },
             lastModified = try { dateFormat.format(Date(file.lastModified())) } catch (_: Exception) { "Unknown" },
             source = source,
             detections = detections

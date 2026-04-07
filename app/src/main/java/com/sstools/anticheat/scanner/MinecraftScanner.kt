@@ -316,13 +316,13 @@ object MinecraftScanner {
             if (useShizuku) {
                 val files = ShizukuHelper.listFilesDetailed(modsPath)
                 files.filter { !it.isDirectory && (it.name.lowercase().endsWith(".jar") || it.name.lowercase().endsWith(".zip")) }
-                    .map { ModFileInfo(it.name, "$modsPath/${it.name}", "%.2f".format(it.size.toFloat() / (1024 * 1024)).toFloat()) }
+                    .map { ModFileInfo(it.name, "$modsPath/${it.name}", bytesToMb(it.size)) }
             } else {
                 val dir = File(modsPath)
                 if (!dir.exists() || !dir.canRead()) return emptyList()
                 dir.listFiles()
                     ?.filter { it.isFile && it.canRead() && it.extension.lowercase() in listOf("jar", "zip") }
-                    ?.map { ModFileInfo(it.name, it.absolutePath, "%.2f".format(it.length().toFloat() / (1024 * 1024)).toFloat()) }
+                    ?.map { ModFileInfo(it.name, it.absolutePath, bytesToMb(it.length())) }
                     ?: emptyList()
             }
         } catch (e: Exception) {

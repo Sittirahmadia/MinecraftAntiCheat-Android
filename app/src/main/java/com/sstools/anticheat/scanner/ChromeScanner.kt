@@ -172,7 +172,7 @@ object ChromeScanner {
                             if (pattern.lowercase() in filenameLower || pattern.lowercase() in urlLower) {
                                 suspiciousDownloads.add(SuspiciousDownload(
                                     filename, targetPath, tabUrl,
-                                    try { "%.2f".format(totalBytes.toFloat() / (1024 * 1024)).toFloat() } catch (_: Exception) { 0f },
+                                    try { bytesToMb(totalBytes) } catch (_: Exception) { 0f },
                                     timeStr, pattern
                                 ))
                                 break

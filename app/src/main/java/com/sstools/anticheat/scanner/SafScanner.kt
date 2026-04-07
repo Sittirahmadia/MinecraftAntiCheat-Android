@@ -96,7 +96,7 @@ object SafScanner {
                     val ext = name.substringAfterLast('.', "").lowercase()
                     if (ext in listOf("jar", "zip")) {
                         val sizeMb = modFile.length().toFloat() / (1024 * 1024)
-                        modsFound.add(SafModFile(name, modFile.uri.toString(), "%.2f".format(sizeMb).toFloat()))
+                        modsFound.add(SafModFile(name, modFile.uri.toString(), roundMb(sizeMb)))
                         totalScanned++
 
                         // Copy to cache and inspect
@@ -131,7 +131,7 @@ object SafScanner {
                             val ext = name.substringAfterLast('.', "").lowercase()
                             if (ext in listOf("jar", "zip")) {
                                 val sizeMb = modFile.length().toFloat() / (1024 * 1024)
-                                modsFound.add(SafModFile(name, modFile.uri.toString(), "%.2f".format(sizeMb).toFloat()))
+                                modsFound.add(SafModFile(name, modFile.uri.toString(), roundMb(sizeMb)))
                                 totalScanned++
                                 try {
                                     val tempFile = copyToCache(context, modFile)

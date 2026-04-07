@@ -205,7 +205,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }?.forEach { modFile ->
                             mods.add(MinecraftScanner.ModFileInfo(
                                 modFile.name, modFile.absolutePath,
-                                "%.2f".format(modFile.length().toFloat() / (1024 * 1024)).toFloat()
+                                bytesToMb(modFile.length())
                             ))
                             try {
                                 val result = JarInspector.inspectJar(modFile)
@@ -409,7 +409,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }?.forEach { modFile ->
                                     mods.add(MinecraftScanner.ModFileInfo(
                                         modFile.name, modFile.absolutePath,
-                                        "%.2f".format(modFile.length().toFloat() / (1024*1024)).toFloat()
+                                        bytesToMb(modFile.length())
                                     ))
                                     try { allModResults.add(JarInspector.inspectJar(modFile)) } catch (_: Exception) {}
                                 }
