@@ -2,17 +2,19 @@ package com.sstools.anticheat.scanner
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
-import android.os.Environment
+import android.util.Log
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * Chrome / Browser History Scanner for Android (non-root)
- * Reads Chrome history database via Shizuku or direct access
- * to find cheat-related URLs and downloads.
+ * Chrome / Browser History Scanner for Android
+ * All operations wrapped in try-catch to prevent crashes.
+ * Chrome DB access requires Shizuku or root — gracefully fails if unavailable.
  */
 object ChromeScanner {
+
+    private const val TAG = "ChromeScanner"
 
     data class ChromeScanResult(
         val profilesFound: Int,
@@ -47,8 +49,6 @@ object ChromeScanner {
         "198macro", "zenithmacro", "crystalmacro",
         "minecrafthacks", "minecraft-hacks", "hackphoenix",
         "wizardhax.com", "cheating.net", "mc-hacks",
-        "mpgh.net/forum/minecraft",
-        "unknowncheats.me/minecraft",
     )
 
     private val SUSPICIOUS_DOWNLOAD_PATTERNS = listOf(
@@ -62,22 +62,37 @@ object ChromeScanner {
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
-    /**
-     * Scan Chrome history by directly reading the History database.
-     * On Android 11+, this requires Shizuku or the file to be copied first.
-     */
     fun scanChromeHistory(context: Context): ChromeScanResult {
-        val profiles = getChromeDbPaths()
         val suspiciousUrls = mutableListOf<SuspiciousUrl>()
         val suspiciousDownloads = mutableListOf<SuspiciousDownload>()
         var totalUrls = 0
         var totalDownloads = 0
+        var profilesFound = 0
+        var errorMsg: String? = null
 
-        for (dbPath in profiles) {
+        val dbPaths = getChromeDbPaths()
+        profilesFound = dbPaths.size
+
+        if (dbPaths.isEmpty()) {
+            // Chrome DB files are in /data/data/ which requires root or Shizuku
+            // On non-rooted devices without proper Shizuku IPC, we can't read them
+            errorMsg = "Browser history requires Shizuku with proper IPC or root access. " +
+                       "Chrome databases are in protected /data/data/ directory."
+            Log.d(TAG, errorMsg)
+        }
+
+        for (dbPath in dbPaths) {
+            var tempDb: File? = null
             try {
-                // Try to copy the db to a temp location to avoid locks
-                val tempDb = File(context.cacheDir, "chrome_history_temp_${System.currentTimeMillis()}.db")
-                File(dbPath).copyTo(tempDb, overwrite = true)
+                val sourceFile = File(dbPath)
+                if (!sourceFile.exists() || !sourceFile.canRead()) {
+                    Log.d(TAG, "Cannot read Chrome DB: $dbPath")
+                    continue
+                }
+
+                // Copy to temp to avoid locks
+                tempDb = File(context.cacheDir, "chrome_history_${System.currentTimeMillis()}.db")
+                sourceFile.copyTo(tempDb, overwrite = true)
 
                 val db = SQLiteDatabase.openDatabase(
                     tempDb.absolutePath, null,
@@ -96,7 +111,6 @@ object ChromeScanner {
                         val title = cursor.getString(1) ?: ""
                         val visitCount = cursor.getInt(2)
                         val lastVisitTime = cursor.getLong(3)
-
                         val visitStr = chromeTimestampToString(lastVisitTime)
                         val urlLower = url.lowercase()
                         val titleLower = title.lowercase()
@@ -109,7 +123,9 @@ object ChromeScanner {
                         }
                     }
                     cursor.close()
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error reading URLs: ${e.message}")
+                }
 
                 // Scan downloads
                 try {
@@ -123,8 +139,7 @@ object ChromeScanner {
                         val tabUrl = cursor.getString(1) ?: ""
                         val totalBytes = cursor.getLong(2)
                         val startTime = cursor.getLong(3)
-
-                        val filename = File(targetPath).name
+                        val filename = try { File(targetPath).name } catch (_: Exception) { targetPath }
                         val filenameLower = filename.lowercase()
                         val urlLower = tabUrl.lowercase()
                         val timeStr = chromeTimestampToString(startTime)
@@ -133,7 +148,7 @@ object ChromeScanner {
                             if (pattern.lowercase() in filenameLower || pattern.lowercase() in urlLower) {
                                 suspiciousDownloads.add(SuspiciousDownload(
                                     filename, targetPath, tabUrl,
-                                    "%.2f".format(totalBytes.toFloat() / (1024 * 1024)).toFloat(),
+                                    try { "%.2f".format(totalBytes.toFloat() / (1024 * 1024)).toFloat() } catch (_: Exception) { 0f },
                                     timeStr, pattern
                                 ))
                                 break
@@ -141,43 +156,49 @@ object ChromeScanner {
                         }
                     }
                     cursor.close()
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error reading downloads: ${e.message}")
+                }
 
                 db.close()
-                tempDb.delete()
-            } catch (_: Exception) { continue }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error processing Chrome DB $dbPath: ${e.message}")
+                if (errorMsg == null) errorMsg = "Error reading browser DB: ${e.message}"
+            } finally {
+                try { tempDb?.delete() } catch (_: Exception) {}
+            }
         }
 
         return ChromeScanResult(
-            profilesFound = profiles.size,
+            profilesFound = profilesFound,
             suspiciousUrls = suspiciousUrls,
             suspiciousDownloads = suspiciousDownloads,
             totalUrlsScanned = totalUrls,
             totalDownloadsScanned = totalDownloads,
-            error = if (profiles.isEmpty()) "No Chrome/browser profiles found (may need Shizuku)" else null
+            error = errorMsg
         )
     }
 
     private fun getChromeDbPaths(): List<String> {
         val paths = mutableListOf<String>()
-        val baseDirs = listOf(
-            // Chrome
+        val candidates = listOf(
             "/data/data/com.android.chrome/app_chrome/Default/History",
             "/data/data/com.android.chrome/app_chrome/Profile 1/History",
-            // Chrome Beta
             "/data/data/com.chrome.beta/app_chrome/Default/History",
-            // Brave
             "/data/data/com.brave.browser/app_chrome/Default/History",
-            // Edge
             "/data/data/com.microsoft.emmx/app_chrome/Default/History",
-            // Opera
             "/data/data/com.opera.browser/app_chrome/Default/History",
-            // Samsung Internet
-            "/data/data/com.sec.android.app.sbrowser/app_sbrowser/Default/History",
         )
 
-        for (path in baseDirs) {
-            if (File(path).exists()) paths.add(path)
+        for (path in candidates) {
+            try {
+                val file = File(path)
+                if (file.exists() && file.canRead()) {
+                    paths.add(path)
+                }
+            } catch (_: Exception) {
+                // Expected on non-rooted devices
+            }
         }
 
         return paths
@@ -185,8 +206,7 @@ object ChromeScanner {
 
     private fun chromeTimestampToString(timestamp: Long): String {
         return try {
-            // Chrome timestamps are microseconds since 1601-01-01
-            val epochOffset = 11644473600000L // ms between 1601 and 1970
+            val epochOffset = 11644473600000L
             val millis = (timestamp / 1000) - epochOffset
             if (millis > 0) dateFormat.format(Date(millis)) else "Unknown"
         } catch (_: Exception) { "Unknown" }

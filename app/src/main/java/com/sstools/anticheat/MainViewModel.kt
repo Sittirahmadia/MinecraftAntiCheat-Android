@@ -2,6 +2,7 @@ package com.sstools.anticheat
 
 import android.app.Application
 import android.content.pm.PackageManager
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sstools.anticheat.scanner.*
@@ -10,7 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import rikka.shizuku.Shizuku
 import java.io.File
 
 data class ScanState(
@@ -40,42 +40,76 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkShizuku() {
         try {
-            val available = Shizuku.pingBinder()
+            // Try to load Shizuku class first
+            val clazz = Class.forName("rikka.shizuku.Shizuku")
+            val pingMethod = clazz.getMethod("pingBinder")
+            val available = pingMethod.invoke(null) as Boolean
+
             val granted = if (available) {
                 try {
-                    Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-                } catch (_: Exception) { false }
+                    val checkMethod = clazz.getMethod("checkSelfPermission")
+                    (checkMethod.invoke(null) as Int) == PackageManager.PERMISSION_GRANTED
+                } catch (_: Throwable) { false }
             } else false
-            _scanState.value = _scanState.value.copy(shizukuAvailable = available, shizukuGranted = granted)
-        } catch (_: Exception) {
-            _scanState.value = _scanState.value.copy(shizukuAvailable = false, shizukuGranted = false)
+
+            _scanState.value = _scanState.value.copy(
+                shizukuAvailable = available,
+                shizukuGranted = granted
+            )
+        } catch (e: Throwable) {
+            // Shizuku not installed or not available - totally fine
+            Log.d("MainViewModel", "Shizuku check failed (not installed?): ${e.message}")
+            _scanState.value = _scanState.value.copy(
+                shizukuAvailable = false,
+                shizukuGranted = false
+            )
         }
     }
 
     fun requestShizukuPermission() {
         try {
-            if (Shizuku.pingBinder()) {
-                if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-                    Shizuku.requestPermission(0)
+            val clazz = Class.forName("rikka.shizuku.Shizuku")
+            val pingMethod = clazz.getMethod("pingBinder")
+            val available = pingMethod.invoke(null) as Boolean
+            if (available) {
+                val checkMethod = clazz.getMethod("checkSelfPermission")
+                val perm = checkMethod.invoke(null) as Int
+                if (perm != PackageManager.PERMISSION_GRANTED) {
+                    val requestMethod = clazz.getMethod("requestPermission", Int::class.java)
+                    requestMethod.invoke(null, 0)
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Throwable) {
+            Log.d("MainViewModel", "Shizuku permission request failed: ${e.message}")
+        }
     }
 
     fun runFullScan() {
         if (_scanState.value.isScanning) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            _scanState.value = ScanState(isScanning = true, progress = 0f, currentTask = "Starting scan...")
-
             try {
+                _scanState.value = ScanState(
+                    isScanning = true,
+                    progress = 0f,
+                    currentTask = "Starting full scan...",
+                    shizukuAvailable = _scanState.value.shizukuAvailable,
+                    shizukuGranted = _scanState.value.shizukuGranted
+                )
+
                 // 1. Detect launchers
                 updateProgress(0.05f, "Detecting Minecraft launchers...")
-                val launchers = MinecraftScanner.detectLaunchers()
+                val launchers = try {
+                    MinecraftScanner.detectLaunchers()
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Launcher detection error: ${e.message}", e)
+                    emptyList()
+                }
                 _scanState.value = _scanState.value.copy(launcherResults = launchers)
+                updateProgress(0.10f, "Found ${launchers.size} launcher(s)")
 
                 // 2. Deep scan all mods
-                updateProgress(0.15f, "Deep scanning mods (JAR + Class inspect)...")
+                updateProgress(0.15f, "Deep scanning mods...")
                 val allModResults = mutableListOf<JarInspector.JarScanResult>()
                 val totalMods = launchers.sumOf { it.mods.size }
                 var scannedMods = 0
@@ -84,29 +118,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     for (mod in launcher.mods) {
                         try {
                             val file = File(mod.path)
-                            if (file.exists()) {
+                            if (file.exists() && file.canRead()) {
                                 val result = JarInspector.inspectJar(file)
                                 allModResults.add(result)
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.e("MainViewModel", "Mod scan error ${mod.name}: ${e.message}")
+                        }
                         scannedMods++
-                        val modProgress = 0.15f + (0.50f * scannedMods / maxOf(totalMods, 1))
-                        updateProgress(modProgress, "Scanning mod ${scannedMods}/${totalMods}: ${mod.name}")
+                        if (totalMods > 0) {
+                            val modProgress = 0.15f + (0.50f * scannedMods / totalMods)
+                            updateProgress(modProgress, "Scanning mod $scannedMods/$totalMods: ${mod.name}")
+                        }
                     }
                 }
                 _scanState.value = _scanState.value.copy(modScanResults = allModResults)
 
                 // 3. Deleted file scan
-                updateProgress(0.70f, "Scanning for deleted/suspicious files...")
-                val deletedResult = DeletedFileScanner.scanDeletedFiles(getApplication<Application>().cacheDir)
+                updateProgress(0.70f, "Scanning for suspicious files...")
+                val deletedResult = try {
+                    DeletedFileScanner.scanDeletedFiles(getApplication<Application>().cacheDir)
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Deleted file scan error: ${e.message}", e)
+                    DeletedFileScanner.DeletedFileScanResult(
+                        emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 0
+                    )
+                }
                 _scanState.value = _scanState.value.copy(deletedFileScanResult = deletedResult)
 
                 // 4. Chrome history scan
                 updateProgress(0.85f, "Scanning browser history...")
                 val chromeResult = try {
                     ChromeScanner.scanChromeHistory(getApplication())
-                } catch (_: Exception) {
-                    ChromeScanner.ChromeScanResult(0, emptyList(), emptyList(), 0, 0, "Could not access browser history")
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Chrome scan error: ${e.message}", e)
+                    ChromeScanner.ChromeScanResult(0, emptyList(), emptyList(), 0, 0, "Browser scan unavailable: ${e.message}")
                 }
                 _scanState.value = _scanState.value.copy(chromeScanResult = chromeResult)
 
@@ -115,8 +161,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 var totalFlags = 0
                 totalFlags += allModResults.count { it.flagged }
                 totalFlags += launchers.sumOf { it.logFindings.size }
-                totalFlags += (deletedResult.flaggedItems.size)
-                totalFlags += (chromeResult.suspiciousUrls.size + chromeResult.suspiciousDownloads.size)
+                totalFlags += deletedResult.flaggedItems.size
+                totalFlags += chromeResult.suspiciousUrls.size + chromeResult.suspiciousDownloads.size
 
                 val verdict = if (totalFlags == 0) "CLEAN" else "FLAGGED"
 
@@ -130,10 +176,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
             } catch (e: Exception) {
+                Log.e("MainViewModel", "Full scan crashed: ${e.message}", e)
                 _scanState.value = _scanState.value.copy(
                     isScanning = false,
-                    error = e.message ?: "Unknown error",
-                    currentTask = "Error: ${e.message}"
+                    error = "Scan error: ${e.message ?: "Unknown error"}",
+                    currentTask = "Error occurred",
+                    scanComplete = true,
+                    verdict = "ERROR"
                 )
             }
         }
@@ -143,10 +192,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_scanState.value.isScanning) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            _scanState.value = ScanState(isScanning = true, progress = 0f, currentTask = "Detecting launchers...")
-
             try {
-                val launchers = MinecraftScanner.detectLaunchers()
+                _scanState.value = ScanState(
+                    isScanning = true,
+                    progress = 0f,
+                    currentTask = "Detecting launchers...",
+                    shizukuAvailable = _scanState.value.shizukuAvailable,
+                    shizukuGranted = _scanState.value.shizukuGranted
+                )
+
+                val launchers = try {
+                    MinecraftScanner.detectLaunchers()
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Launcher detection error: ${e.message}", e)
+                    emptyList()
+                }
                 _scanState.value = _scanState.value.copy(launcherResults = launchers)
                 updateProgress(0.1f, "Found ${launchers.size} launcher(s)")
 
@@ -158,13 +218,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     for (mod in launcher.mods) {
                         try {
                             val file = File(mod.path)
-                            if (file.exists()) {
+                            if (file.exists() && file.canRead()) {
                                 allModResults.add(JarInspector.inspectJar(file))
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.e("MainViewModel", "Mod scan error: ${e.message}")
+                        }
                         scannedMods++
-                        updateProgress(0.1f + (0.85f * scannedMods / maxOf(totalMods, 1)),
-                            "Inspecting ${mod.name} ($scannedMods/$totalMods)")
+                        if (totalMods > 0) {
+                            updateProgress(
+                                0.1f + (0.85f * scannedMods / totalMods),
+                                "Inspecting ${mod.name} ($scannedMods/$totalMods)"
+                            )
+                        }
                     }
                 }
 
@@ -180,10 +246,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     scanComplete = true
                 )
             } catch (e: Exception) {
+                Log.e("MainViewModel", "MC scan crashed: ${e.message}", e)
                 _scanState.value = _scanState.value.copy(
                     isScanning = false,
-                    error = e.message,
-                    currentTask = "Error: ${e.message}"
+                    error = "Scan error: ${e.message ?: "Unknown error"}",
+                    currentTask = "Error occurred",
+                    scanComplete = true,
+                    verdict = "ERROR"
                 )
             }
         }

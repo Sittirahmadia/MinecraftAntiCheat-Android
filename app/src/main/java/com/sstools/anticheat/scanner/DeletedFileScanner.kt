@@ -1,16 +1,18 @@
 package com.sstools.anticheat.scanner
 
 import android.os.Environment
+import android.util.Log
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
 /**
  * Deleted File Scanner for Android (non-root)
- * Scans accessible temp directories, download history, and cache
- * for traces of cheat-related files.
+ * All file operations wrapped in try-catch to prevent crashes
  */
 object DeletedFileScanner {
+
+    private const val TAG = "DeletedFileScanner"
 
     data class DeletedFileScanResult(
         val tempFiles: List<SuspiciousFile>,
@@ -42,89 +44,119 @@ object DeletedFileScanner {
         var totalScanned = 0
 
         // 1. Scan Downloads directory
-        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        if (downloadsDir.exists()) {
-            downloadsDir.listFiles()?.forEach { file ->
-                if (file.isFile) {
-                    totalScanned++
-                    val ext = ".${file.extension.lowercase()}"
-                    if (ext in SUSPICIOUS_EXTENSIONS) {
-                        val sf = createSuspiciousFile(file, "Downloads")
-                        downloadFiles.add(sf)
-                        if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
+        try {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (downloadsDir != null && downloadsDir.exists() && downloadsDir.canRead()) {
+                downloadsDir.listFiles()?.forEach { file ->
+                    try {
+                        if (file.isFile && file.canRead()) {
+                            totalScanned++
+                            val ext = ".${file.extension.lowercase()}"
+                            if (ext in SUSPICIOUS_EXTENSIONS) {
+                                val sf = createSuspiciousFile(file, "Downloads")
+                                downloadFiles.add(sf)
+                                if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Error scanning download file: ${e.message}")
                     }
                 }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning Downloads: ${e.message}")
         }
 
-        // 2. Scan temp directories
-        val tempDirs = listOf(
-            File("/data/local/tmp"),
-            File(Environment.getExternalStorageDirectory(), ".tmp"),
-            File(Environment.getExternalStorageDirectory(), "tmp"),
-        )
-        for (tmpDir in tempDirs) {
-            if (tmpDir.exists() && tmpDir.isDirectory) {
-                tmpDir.listFiles()?.forEach { file ->
-                    if (file.isFile) {
-                        totalScanned++
-                        val ext = ".${file.extension.lowercase()}"
-                        if (ext in SUSPICIOUS_EXTENSIONS) {
-                            val sf = createSuspiciousFile(file, "Temp")
-                            tempFiles.add(sf)
-                            if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
+        // 2. Scan temp directories (only accessible ones)
+        try {
+            val tempDirPaths = listOf(
+                "/storage/emulated/0/.tmp",
+                "/storage/emulated/0/tmp",
+            )
+            for (tmpPath in tempDirPaths) {
+                try {
+                    val tmpDir = File(tmpPath)
+                    if (tmpDir.exists() && tmpDir.isDirectory && tmpDir.canRead()) {
+                        tmpDir.listFiles()?.forEach { file ->
+                            try {
+                                if (file.isFile && file.canRead()) {
+                                    totalScanned++
+                                    val ext = ".${file.extension.lowercase()}"
+                                    if (ext in SUSPICIOUS_EXTENSIONS) {
+                                        val sf = createSuspiciousFile(file, "Temp")
+                                        tempFiles.add(sf)
+                                        if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
+                                    }
+                                }
+                            } catch (_: Exception) {}
                         }
                     }
-                }
+                } catch (_: Exception) {}
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning temp dirs: ${e.message}")
         }
 
         // 3. Scan app cache directory
-        if (cacheDir != null && cacheDir.exists()) {
-            scanCacheDir(cacheDir, cacheFiles, flaggedItems)
-            totalScanned += cacheFiles.size
-        }
-
-        // 4. Scan for recently installed APKs (cheat-related)
-        val apkDirs = listOf(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            File(Environment.getExternalStorageDirectory(), "Download"),
-            File(Environment.getExternalStorageDirectory(), "APK"),
-        )
-        for (dir in apkDirs) {
-            if (dir.exists() && dir.isDirectory) {
-                dir.walkTopDown().maxDepth(2).filter { it.isFile && it.extension.lowercase() == "apk" }.forEach { file ->
-                    totalScanned++
-                    val sf = createSuspiciousFile(file, "APK")
-                    recentApks.add(sf)
-                    if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
-                }
+        try {
+            if (cacheDir != null && cacheDir.exists() && cacheDir.canRead()) {
+                scanCacheDirSafe(cacheDir, cacheFiles, flaggedItems)
+                totalScanned += cacheFiles.size
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning cache: ${e.message}")
         }
 
-        // 5. Scan Android/data for leftover cheat launcher data
-        val androidDataDir = File(Environment.getExternalStorageDirectory(), "Android/data")
-        if (androidDataDir.exists()) {
-            val suspiciousPackages = listOf(
-                "com.cheatengine", "com.gameguardian", "com.topjohnwu.magisk",
-                "eu.chainfire.supersu", "com.noshufou.android.su",
-                "com.koushikdutta.superuser", "com.thirdparty.superuser",
+        // 4. Scan for APKs in Downloads
+        try {
+            val downloadDirs = listOf(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
             )
-            androidDataDir.listFiles()?.forEach { dir ->
-                if (dir.isDirectory) {
-                    for (susPkg in suspiciousPackages) {
-                        if (dir.name == susPkg) {
+            for (dir in downloadDirs) {
+                try {
+                    if (dir != null && dir.exists() && dir.isDirectory && dir.canRead()) {
+                        dir.walkTopDown().maxDepth(2)
+                            .filter {
+                                try { it.isFile && it.canRead() && it.extension.lowercase() == "apk" }
+                                catch (_: Exception) { false }
+                            }
+                            .forEach { file ->
+                                try {
+                                    totalScanned++
+                                    val sf = createSuspiciousFile(file, "APK")
+                                    recentApks.add(sf)
+                                    if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
+                                } catch (_: Exception) {}
+                            }
+                    }
+                } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning APKs: ${e.message}")
+        }
+
+        // 5. Check Android/data for suspicious packages (safely)
+        try {
+            val androidDataDir = File("/storage/emulated/0/Android/data")
+            if (androidDataDir.exists() && androidDataDir.canRead()) {
+                val suspiciousPackages = listOf(
+                    "com.cheatengine", "com.gameguardian",
+                    "eu.chainfire.supersu", "com.noshufou.android.su",
+                )
+                androidDataDir.listFiles()?.forEach { dir ->
+                    try {
+                        if (dir.isDirectory && dir.name in suspiciousPackages) {
                             flaggedItems.add(SuspiciousFile(
                                 filename = dir.name,
                                 path = dir.absolutePath,
                                 sizeMb = 0f,
-                                lastModified = dateFormat.format(Date(dir.lastModified())),
-                                source = "Android/data (suspicious package)",
+                                lastModified = try { dateFormat.format(Date(dir.lastModified())) } catch (_: Exception) { "Unknown" },
+                                source = "Android/data (suspicious)",
                                 detections = listOf(DetectionResult(
                                     signatureName = "Suspicious Package: ${dir.name}",
                                     category = "Suspicious App",
                                     severity = "high",
-                                    description = "Found data directory for suspicious application: ${dir.name}",
+                                    description = "Found data for suspicious app: ${dir.name}",
                                     matchedPatterns = listOf("package:${dir.name}"),
                                     matchCount = 1,
                                     filePath = dir.absolutePath,
@@ -132,9 +164,12 @@ object DeletedFileScanner {
                                 ))
                             ))
                         }
-                    }
+                    } catch (_: Exception) {}
                 }
             }
+        } catch (e: Exception) {
+            // Android/data not accessible without Shizuku on Android 11+ — expected
+            Log.d(TAG, "Android/data not accessible: ${e.message}")
         }
 
         return DeletedFileScanResult(
@@ -148,31 +183,43 @@ object DeletedFileScanner {
     }
 
     private fun createSuspiciousFile(file: File, source: String): SuspiciousFile {
-        val detections = CheatDetector.detectCheats(
-            content = file.nameWithoutExtension,
-            filename = file.name,
-            filePath = file.absolutePath
-        )
+        val detections = try {
+            CheatDetector.detectCheats(
+                content = file.nameWithoutExtension,
+                filename = file.name,
+                filePath = file.absolutePath
+            )
+        } catch (_: Exception) { emptyList() }
+
         return SuspiciousFile(
             filename = file.name,
             path = file.absolutePath,
-            sizeMb = "%.2f".format(file.length().toFloat() / (1024 * 1024)).toFloat(),
-            lastModified = dateFormat.format(Date(file.lastModified())),
+            sizeMb = try { "%.2f".format(file.length().toFloat() / (1024 * 1024)).toFloat() } catch (_: Exception) { 0f },
+            lastModified = try { dateFormat.format(Date(file.lastModified())) } catch (_: Exception) { "Unknown" },
             source = source,
             detections = detections
         )
     }
 
-    private fun scanCacheDir(cacheDir: File, cacheFiles: MutableList<SuspiciousFile>, flaggedItems: MutableList<SuspiciousFile>) {
+    private fun scanCacheDirSafe(cacheDir: File, cacheFiles: MutableList<SuspiciousFile>, flaggedItems: MutableList<SuspiciousFile>) {
         try {
-            cacheDir.walkTopDown().maxDepth(3).filter { it.isFile }.forEach { file ->
-                val ext = ".${file.extension.lowercase()}"
-                if (ext in SUSPICIOUS_EXTENSIONS) {
-                    val sf = createSuspiciousFile(file, "Cache")
-                    cacheFiles.add(sf)
-                    if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
+            cacheDir.walkTopDown().maxDepth(3)
+                .filter {
+                    try { it.isFile && it.canRead() }
+                    catch (_: Exception) { false }
                 }
-            }
-        } catch (_: Exception) {}
+                .forEach { file ->
+                    try {
+                        val ext = ".${file.extension.lowercase()}"
+                        if (ext in SUSPICIOUS_EXTENSIONS) {
+                            val sf = createSuspiciousFile(file, "Cache")
+                            cacheFiles.add(sf)
+                            if (sf.detections.isNotEmpty()) flaggedItems.add(sf)
+                        }
+                    } catch (_: Exception) {}
+                }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning cache dir: ${e.message}")
+        }
     }
 }
