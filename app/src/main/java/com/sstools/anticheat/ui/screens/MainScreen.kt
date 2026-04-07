@@ -252,16 +252,32 @@ fun ProgressSection(state: ScanState) {
     Card(colors = CardDefaults.cardColors(containerColor = DarkCard), shape = RoundedCornerShape(14.dp)) {
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp, color = Purple)
+                // Simple pulsing dot instead of CircularProgressIndicator (avoids animation API crash)
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(Purple)
+                )
                 Text("Scanning...", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             }
             Spacer(Modifier.height(16.dp))
-            LinearProgressIndicator(
-                progress = state.progress,
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                color = Purple,
-                trackColor = DarkBorder,
-            )
+            // Custom progress bar using Box (avoids LinearProgressIndicator animation crash)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(DarkBorder)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction = state.progress.coerceIn(0f, 1f))
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Brush.horizontalGradient(listOf(Purple, Pink)))
+                )
+            }
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(state.currentTask, fontSize = 12.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
