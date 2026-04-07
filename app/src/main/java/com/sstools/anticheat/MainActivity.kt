@@ -1,12 +1,12 @@
 package com.sstools.anticheat
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.content.Intent
-import android.net.Uri
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -29,14 +29,32 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ -> }
 
-    // Shizuku listener is initialized lazily to avoid crash if Shizuku not installed
-    private var shizukuListenerRegistered = false
+    // SAF folder picker result
+    val folderPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            // Persist permission so we can re-read later
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {}
+            }
+            Log.i("MainActivity", "Folder selected: $uri")
+            viewModel.onFolderSelected(this, uri)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         requestStoragePermissions()
-        registerShizukuListenerSafe()
 
         setContent {
             AntiCheatTheme {
@@ -46,7 +64,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainScreen(
                         viewModel = viewModel,
-                        onRequestShizuku = { viewModel.requestShizukuPermission() },
+                        onSelectFolder = { openFolderPicker() },
                         onRequestStorage = { requestStoragePermissions() }
                     )
                 }
@@ -54,36 +72,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        viewModel.checkShizuku()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        unregisterShizukuListenerSafe()
-    }
-
-    private fun registerShizukuListenerSafe() {
+    private fun openFolderPicker() {
         try {
-            val clazz = Class.forName("rikka.shizuku.Shizuku")
-            // If we can load the class, try to register
-            rikka.shizuku.Shizuku.addRequestPermissionResultListener { _, _ ->
-                viewModel.checkShizuku()
+            // Try to open directly to Android/data for convenience
+            val initialUri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3AAndroid%2Fdata")
+            folderPickerLauncher.launch(initialUri)
+        } catch (e: Exception) {
+            // Fallback: open root
+            try {
+                folderPickerLauncher.launch(null)
+            } catch (_: Exception) {
+                Log.e("MainActivity", "Cannot open folder picker")
             }
-            shizukuListenerRegistered = true
-        } catch (e: Throwable) {
-            // Shizuku not available - that's fine
-            Log.d("MainActivity", "Shizuku not available: ${e.message}")
-            shizukuListenerRegistered = false
         }
-    }
-
-    private fun unregisterShizukuListenerSafe() {
-        if (!shizukuListenerRegistered) return
-        try {
-            // We can't easily remove a lambda listener, so just catch any errors
-        } catch (_: Throwable) {}
     }
 
     private fun requestStoragePermissions() {
@@ -96,8 +97,7 @@ class MainActivity : ComponentActivity() {
                         startActivity(intent)
                     } catch (_: Exception) {
                         try {
-                            val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                            startActivity(intent)
+                            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                         } catch (_: Exception) {}
                     }
                 }
@@ -109,12 +109,10 @@ class MainActivity : ComponentActivity() {
                 val needed = perms.filter {
                     ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
                 }.toTypedArray()
-                if (needed.isNotEmpty()) {
-                    storagePermissionLauncher.launch(needed)
-                }
+                if (needed.isNotEmpty()) storagePermissionLauncher.launch(needed)
             }
         } catch (e: Exception) {
-            Log.e("MainActivity", "Permission request error: ${e.message}")
+            Log.e("MainActivity", "Permission error: ${e.message}")
         }
     }
 }

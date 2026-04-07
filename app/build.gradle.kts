@@ -63,6 +63,9 @@ dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
+    // DocumentFile (SAF - Storage Access Framework)
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
